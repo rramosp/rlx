@@ -19,6 +19,9 @@ else:
 import warnings
 warnings.filterwarnings(action="ignore", module="scipy", message="^internal gelsd")
 
+def get_cluster_colors(clusters):
+    return {c: plt.cm.brg(255*c/(len(clusters)-1)) for c in clusters}
+
 def load_Ik_data(fname, show_dates=True):
     print "loading file"
     d = pd.read_csv(fname)
@@ -92,7 +95,7 @@ def compute_positions_and_GPS_errors(d, init_date, calcpos_to):
 
 def plot_sdgroups(vfree, vfixed, legend=True, figsize=(12,8)):
     clusters = np.unique(vfree.cluster)
-    cluster_colors = {c: plt.cm.brg(255*c/(len(clusters)-1)) for c in clusters}
+    cluster_colors = get_cluster_colors(clusters)
 
     if figsize is not None:
         fig = plt.figure(figsize=figsize)

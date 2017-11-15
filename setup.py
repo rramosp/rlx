@@ -9,6 +9,6 @@ setup(name='rlx',
       author='rlx',
       author_email='rulix.rp@gmail.com',
       license='MIT',
-      packages=['rlx'],
+      packages=['rlx', 'rlx.topics', 'rlx.auger'],
       include_package_data=True,
       zip_safe=False)

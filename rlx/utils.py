@@ -1,10 +1,18 @@
 
 import itertools
 import pandas as pd
+import numpy as np
 from datetime import *
 from joblib import Parallel
 import sys
-
+from pygments import highlight
+from pygments.lexers import get_lexer_by_name
+from pygments.formatters import HtmlFormatter
+import re
+import inspect
+from IPython.core import display
+import contextlib
+import math
 
 def running_in_notebook():
     try:
@@ -110,6 +118,17 @@ def gpsFromUTC(year, month, day, hour, min, sec, leapSecs=14):
 def flatten (x):
     return [i for i in itertools.chain.from_iterable(x)]
 
+
+def split_str(s, w):
+    """
+    splits a string in fixed size splits (except, possibly, the last one)
+    :param s: string to split
+    :param w: length of splits
+    :return: the string splitted
+    """
+    return [s[w * i:np.min((len(s), w * (i + 1)))] for i in range(len(s) / w + 1 * (len(s) % w != 0))]
+
+
 class DictionaryList:
 
     def __init__(self):
@@ -174,3 +193,61 @@ class DictionaryList:
                      self.d[k], **kwargs)
             plt.xlabel(xlabel)
             plt.title(k)
+
+def show_source(f):
+    import inspect
+    src = inspect.getsource(f)
+    html = hilite_code(src)
+    return display.HTML(html)
+
+def hilite_code(code):
+    lexer = 'python'
+    style = 'colorful'
+    defstyles = 'overflow:auto;width:auto;'
+    divstyles = ""
+    prestyles = """
+    margin: 0;
+    background: #555;
+    background-image: -webkit-linear-gradient(#FFFFFF 50%, #F9F9F9 50%);
+    background-image:    -moz-linear-gradient(#FFFFFF 50%, #F9F9F9 50%);
+    background-image:     -ms-linear-gradient(#FFFFFF 50%, #F9F9F9 50%);
+    background-image:      -o-linear-gradient(#FFFFFF 50%, #F9F9F9 50%);
+    background-image:         linear-gradient(#FFFFFF 50%, #F9F9F9 50%);
+    background-position: 0 0;
+    background-repeat: repeat;
+    background-size: 4.5em 2.5em;    
+        """
+    formatter = HtmlFormatter(style=style,
+                              linenos=False,
+                              noclasses=True,
+                              cssclass='',
+                              cssstyles=defstyles + divstyles,
+                              prestyles=prestyles)
+    html = highlight(code, get_lexer_by_name(lexer), formatter)
+    nbs = "\n".join(["%4d"%i for i in range(1,len(code.split("\n")))])
+    html = "<table><tr><td valign='top'><pre style='margin: 0; line-height: 125%;"+prestyles+"'>"+nbs+"</pre></td><td><div style='text-align: left'>"+html+"</div></td></tr></table>"
+    html = "<!-- HTML generated using hilite.me -->" + html
+    return html
+
+def get_default_style():
+    return 'border:solid gray;border-width:.1em .1em .1em .8em;padding:.2em .6em;'
+
+
+@contextlib.contextmanager
+def printoptions(*args, **kwargs):
+    original = np.get_printoptions()
+    np.set_printoptions(*args, **kwargs)
+    try:
+        yield
+    finally:
+        np.set_printoptions(**original)
+
+
+def np2str(x, dec_places=2, margin=0, linewidth=140):
+    int_places = int(np.log10(np.max(np.abs(x))))+1
+    fmt = '{: '+str(int_places+dec_places+2)+"."+str(dec_places)+'f}'
+    with printoptions(formatter={'float': fmt.format}, linewidth=linewidth):
+        s = str(x)
+    m = " "*margin
+    return m+s.replace("\n", "\n"+m)
+
