@@ -215,7 +215,7 @@ def hilite_code(code):
     background-image:         linear-gradient(#FFFFFF 50%, #F9F9F9 50%);
     background-position: 0 0;
     background-repeat: repeat;
-    background-size: 4.5em 2.5em;    
+    background-size: 4.5em 2.5em;
         """
     formatter = HtmlFormatter(style=style,
                               linenos=False,
@@ -251,3 +251,22 @@ def np2str(x, dec_places=2, margin=0, linewidth=140):
     m = " "*margin
     return m+s.replace("\n", "\n"+m)
 
+
+def mkdir(newdir):
+    import os
+    """works the way a good mkdir should :)
+        - already exists, silently complete
+        - regular file in the way, raise an exception
+        - parent directory(ies) does not exist, make them as well
+    """
+    if os.path.isdir(newdir):
+        pass
+    elif os.path.isfile(newdir):
+        raise OSError("a file with the same name as the desired "\
+                      "dir, '%s', already exists." % newdir)
+    else:
+        head, tail = os.path.split(newdir)
+        if head and not os.path.isdir(head):
+            mkdir(head)
+        if tail:
+            os.mkdir(newdir)
