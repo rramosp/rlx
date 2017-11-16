@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 def abs_error(estimator, X, y):
     preds = estimator.predict(X)
@@ -34,7 +35,7 @@ def lcurve(cvlist, **kwargs):
        rs = lcurve (cvlist=cvs, estimator=DecisionTreeClassifier(),
                     X=X[:100], y=y[:100], n_jobs=5)
     """
-    
+
     from sklearn.model_selection import cross_validate
 
     rs = []
