@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import rlx.utils as ru
+import matplotlib.pyplot as plot
 
 def abs_error(estimator, X, y):
     preds = estimator.predict(X)
@@ -58,3 +59,36 @@ def lcurve(cvlist, tqdm=None, **kwargs):
             k.loc[c,"std"][j] = i.loc[c]["std"]
     k.columns = pd.Index(cvlist, name="run")
     return k
+
+
+def plot_lcurve(rs):
+    tsm, tss = rs.loc["test_score","mean"].values, rs.loc["test_score","std"].values
+    trm, trs = rs.loc["train_score","mean"].values, rs.loc["train_score","std"].values
+    plt.plot(tsm, color="red", label="test")
+    plt.fill_between(range(len(tsm)), tsm-tss, tsm+tss, color="red", alpha=.1)
+    plt.plot(trm, color="blue", label="train")
+    plt.fill_between(range(len(trm)), trm-trs, trm+trs, color="blue", alpha=.1)
+    plt.ylim(0,1.05)
+    plt.legend()
+    plt.grid()
+    plt.ylabel("score")
+
+    cvs = rs.columns
+    cname = cvs[0].__class__.__name__
+
+    attrs = ["train_size", "n_spxlits", "n_folds"]
+
+    attr = np.r_[[hasattr(cvs[0], i) for i in attrs]]
+
+    if len(np.argwhere(attr))==0:
+        xlabels = range(len(cvs))
+    else:
+        attr = attrs[np.argwhere(attr)[0][0]]
+        xlabels = [getattr(i, attr) for i in cvs]
+    if isinstance(xlabels[0], int):
+        xlabels = ["%d"%i for i in xlabels]
+    elif isinstance(xlabels[0], float):
+        xlabels = ["%.2f"%i for i in xlabels]
+
+    plt.xticks(range(len(xlabels)), xlabels)
+    plt.xlabel(attr)
