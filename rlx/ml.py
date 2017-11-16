@@ -73,10 +73,11 @@ def lcurve(estimator, X, y, scorer, cvs, n_jobs=-1, verbose=0):
     r = ru.mParallel(n_jobs=n_jobs, verbose=verbose)(delayed(fit_score)(estimator, X, y, i, scorer) for i in k)
 
     r = pd.DataFrame(r, columns=["cv", "estimator", "train_score", "test_score", "fit_time", "score_time"])
-    return r
-    keys = {str(i): i for i in r.cv}
-    r = r.groupby(keys.keys()).agg([np.mean, np.std, len])
-    r.index = [keys[i] for i in r.index]
+
+    k = {str(i): i for i in r.cv}
+    r = r.groupby([str(i) for i in r.cv]).mean()
+    r.index = [k[i] for i in r.index]
+
     return r
 
 
