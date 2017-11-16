@@ -75,7 +75,7 @@ def lcurve(estimator, X, y, scorer, cvs, n_jobs=-1, verbose=0):
     r = pd.DataFrame(r, columns=["cv", "estimator", "train_score", "test_score", "fit_time", "score_time"])
 
     k = {str(i): i for i in r.cv}
-    r = r.groupby([str(i) for i in r.cv]).mean()
+    r = r.groupby([str(i) for i in r.cv]).agg([np.mean, np.std, len])
     r.index = [k[i] for i in r.index]
 
     return r
