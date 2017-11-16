@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import rlx.utils as ru
-import matplotlib.pyplot as plot
+import matplotlib.pyplot as plt
 
 def abs_error(estimator, X, y):
     preds = estimator.predict(X)
