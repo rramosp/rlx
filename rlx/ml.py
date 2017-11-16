@@ -22,7 +22,7 @@ class BaselinePredictor:
         return abs_error(self, X,y)
 
 
-def lcurve(cvlist, **kwargs):
+def lcurve(cvlist, tqdm=None, **kwargs):
     """
        cvlist: list of cross validation objects
        kwargs: args to pass to cross_validate
@@ -40,7 +40,9 @@ def lcurve(cvlist, **kwargs):
     from sklearn.model_selection import cross_validate
 
     rs = []
-    for cv in cvlist:
+    tqdm = list if tqdm is None else tqdm
+
+    for cv in tqdm(cvlist):
         r = cross_validate(cv=cv, return_train_score=True, **kwargs)
         r = pd.DataFrame(r).agg([np.mean, np.std]).T
         rs.append(r)
