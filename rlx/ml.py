@@ -82,8 +82,31 @@ def lcurve(estimator, X, y, scorer, cvs, n_jobs=-1, verbose=0):
 
 
 def plot_lcurve(rs):
-    tsm, tss = rs["test_score"]["mean"].values, rs["test_score"]["std"].values
-    trm, trs = rs["train_score"]["mean"].values, rs["train_score"]["std"].values
+
+    # extract size indicator from cross validator
+    cvs = rs.index
+    attrs = ["test_size", "n_splits", "n_folds"]
+    attr = np.r_[[hasattr(cvs[0], i) for i in attrs]]
+
+    if len(np.argwhere(attr)) == 0:
+        nlabels = range(len(cvs))
+    else:
+        attr = attrs[np.argwhere(attr)[0][0]]
+        nlabels = [getattr(i, attr) for i in cvs]
+
+    if isinstance(nlabels[0], int):
+        xlabels = np.r_[["%d" % i for i in nlabels]]
+    elif isinstance(nlabels[0], float):
+        xlabels = np.r_[["%.2f" % i for i in nlabels]]
+    else:
+        raise ValueError('cannot find numeric labels to sort cross validators')
+
+    # make sure plotting is sorted on the x axis
+    idxs = np.argsort(nlabels)
+
+    # plot
+    tsm, tss = rs["test_score"]["mean"].values[idxs], rs["test_score"]["std"].values[idxs]
+    trm, trs = rs["train_score"]["mean"].values[idxs], rs["train_score"]["std"].values[idxs]
     plt.plot(tsm, color="red", label="test", marker="o")
     plt.fill_between(range(len(tsm)), tsm-tss, tsm+tss, color="red", alpha=.1)
     plt.plot(trm, color="green", label="train", marker="o")
@@ -93,21 +116,5 @@ def plot_lcurve(rs):
     plt.grid()
     plt.ylabel("score")
 
-    cvs = rs.index
-
-    attrs = ["test_size", "n_spxlits", "n_folds"]
-
-    attr = np.r_[[hasattr(cvs[0], i) for i in attrs]]
-
-    if len(np.argwhere(attr)) == 0:
-        xlabels = range(len(cvs))
-    else:
-        attr = attrs[np.argwhere(attr)[0][0]]
-        xlabels = [getattr(i, attr) for i in cvs]
-    if isinstance(xlabels[0], int):
-        xlabels = ["%d" % i for i in xlabels]
-    elif isinstance(xlabels[0], float):
-        xlabels = ["%.2f" % i for i in xlabels]
-
-    plt.xticks(range(len(xlabels)), xlabels)
+    plt.xticks(range(len(xlabels)), xlabels[idxs])
     plt.xlabel(attr)
