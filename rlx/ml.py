@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-import rlx.utlis as ru
+import rlx.utils as ru
 
 def abs_error(estimator, X, y):
     preds = estimator.predict(X)
