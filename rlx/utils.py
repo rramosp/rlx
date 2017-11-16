@@ -27,10 +27,11 @@ def running_in_notebook():
 
 class mParallel(Parallel):
     def _print(self, msg, msg_args):
-        if self.verbose>10:
+        if self.verbose > 10:
             fmsg = '[%s]: %s' % (self, msg % msg_args)
             sys.stdout.write('\r ' + fmsg)
             sys.stdout.flush()
+
 
 def to_timedelta(t):
     bd_class = pd.tseries.offsets.BusinessDay
