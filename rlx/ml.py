@@ -64,10 +64,10 @@ def lcurve(cvlist, tqdm=None, **kwargs):
 def plot_lcurve(rs):
     tsm, tss = rs.loc["test_score","mean"].values, rs.loc["test_score","std"].values
     trm, trs = rs.loc["train_score","mean"].values, rs.loc["train_score","std"].values
-    plt.plot(tsm, color="red", label="test")
+    plt.plot(tsm, color="red", label="test", marker="o")
     plt.fill_between(range(len(tsm)), tsm-tss, tsm+tss, color="red", alpha=.1)
-    plt.plot(trm, color="blue", label="train")
-    plt.fill_between(range(len(trm)), trm-trs, trm+trs, color="blue", alpha=.1)
+    plt.plot(trm, color="green", label="train", marker="o")
+    plt.fill_between(range(len(trm)), trm-trs, trm+trs, color="green", alpha=.1)
     plt.ylim(0,1.05)
     plt.legend()
     plt.grid()
