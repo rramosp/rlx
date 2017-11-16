@@ -85,26 +85,25 @@ def plot_lcurve(rs):
 
     # extract size indicator from cross validator
     cvs = rs.index
-    attrs = ["test_size", "n_splits", "n_folds"]
+    attrs = ["train_size", "test_size", "n_splits", "n_folds"]
     attr = np.r_[[hasattr(cvs[0], i) for i in attrs]]
 
     if len(np.argwhere(attr)) == 0:
-        nlabels = range(len(cvs))
+        nlabels = np.arange(len(cvs))
     else:
         attr = attrs[np.argwhere(attr)[0][0]]
-        nlabels = [getattr(i, attr) for i in cvs]
+        nlabels = np.r_[[getattr(i, attr) for i in cvs]]
 
     if isinstance(nlabels[0], int):
         xlabels = np.r_[["%d" % i for i in nlabels]]
     elif isinstance(nlabels[0], float):
         xlabels = np.r_[["%.2f" % i for i in nlabels]]
     else:
-        raise ValueError('cannot find numeric labels to sort cross validators')
+        xlabels = np.r_[["%d" % i for i in range(len(nlabels))]]
+        nlabels = np.arange(len(nlabels))
 
-    # make sure plotting is sorted on the x axis
-    idxs = np.argsort(nlabels)
 
-    # plot
+    idxs = np.argsort(-nlabels) if attr not in ["n_splits", "train_size"] else np.argsort(nlabels)
     tsm, tss = rs["test_score"]["mean"].values[idxs], rs["test_score"]["std"].values[idxs]
     trm, trs = rs["train_score"]["mean"].values[idxs], rs["train_score"]["std"].values[idxs]
     plt.plot(tsm, color="red", label="test", marker="o")
