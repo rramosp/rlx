@@ -23,6 +23,27 @@ class BaselinePredictor:
     def score(self, X, y):
         return abs_error(self, X,y)
 
+def fit_score(estimator, X,y, fold_spec, scorer):
+    from sklearn.base import clone
+    from time import time
+    e = clone(estimator)
+    itr, its = fold_spec["train_idxs"], fold_spec["test_idxs"]
+
+    Xtr, ytr = X[itr], y[itr]
+    Xts, yts = X[its], y[its]
+
+    t1 = time()
+    e.fit(Xtr, ytr)
+    fit_time = time()-t1
+
+    t2 = time()
+    tr_score = scorer(e, Xtr, ytr)
+    ts_score = scorer(e, Xts, yts)
+    score_time = time()-t2
+
+    return fold_spec["cv"], estimator, tr_score, ts_score, fit_time, score_time
+
+
 def lcurve(estimator, X, y, scorer, cvs, n_jobs=-1, verbose=0):
     """
        estimator: the estimator
