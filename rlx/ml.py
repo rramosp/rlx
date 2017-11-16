@@ -22,8 +22,32 @@ class BaselinePredictor:
     def score(self, X, y):
         return abs_error(self, X,y)
 
+def lcurve(estimator, X, y, scorer, cvs, n_jobs=-1, verbose=0):
+    """
+       estimator: the estimator
+       X,y: the data
+       scorer: a scorer object, with signature scorer(estimator, X,y)
+       cvlist: list of cross validation objects
 
-def lcurve(cvlist, tqdm=None, **kwargs):
+       return: a DataFrame
+
+       example:
+
+       cvs = [StratifiedShuffleSplit(n_splits=5, test_size=i)
+              for i in [.9,.5,.1]]
+       rs = lcurve (cvs=cvs, estimator=DecisionTreeClassifier(),
+                    X=X[:100], y=y[:100], n_jobs=5)
+    """
+
+    k = [{"cv":cv, "train_idxs": itr, "test_idxs":its} for cv in cvs for itr, its in cv.split(X,y)]
+    r = ru.mParallel(n_jobs=n_jobs, verbose=verbose)(delayed(fit_score)(estimator, X, y, i, scorer) for i in k)
+
+    r = pd.DataFrame(r, columns=["cv", "estimator", "train_score", "test_score", "fit_time", "score_time"])
+    r = r.groupby([str(i) for i in r.cv]).agg([np.mean, np.std, len])
+    r.index = [eval(i) for i in r.index]
+    return r
+
+def xlcurve(cvlist, tqdm=None, **kwargs):
     """
        cvlist: list of cross validation objects
        kwargs: args to pass to cross_validate
@@ -62,8 +86,8 @@ def lcurve(cvlist, tqdm=None, **kwargs):
 
 
 def plot_lcurve(rs):
-    tsm, tss = rs.loc["test_score","mean"].values, rs.loc["test_score","std"].values
-    trm, trs = rs.loc["train_score","mean"].values, rs.loc["train_score","std"].values
+    tsm, tss = rs["test_score"]["mean"].values, rs["test_score"]["std"].values
+    trm, trs = rs["train_score"]["mean"].values, rs["train_score"]["std"].values
     plt.plot(tsm, color="red", label="test", marker="o")
     plt.fill_between(range(len(tsm)), tsm-tss, tsm+tss, color="red", alpha=.1)
     plt.plot(trm, color="green", label="train", marker="o")
@@ -73,10 +97,10 @@ def plot_lcurve(rs):
     plt.grid()
     plt.ylabel("score")
 
-    cvs = rs.columns
+    cvs = rs.index
     cname = cvs[0].__class__.__name__
 
-    attrs = ["train_size", "n_spxlits", "n_folds"]
+    attrs = ["test_size", "n_spxlits", "n_folds"]
 
     attr = np.r_[[hasattr(cvs[0], i) for i in attrs]]
 
