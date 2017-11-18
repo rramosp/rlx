@@ -1,0 +1,44 @@
+#!/usr/bin/env python
+import argparse
+import numpy as np
+import pandas as pd
+import commands
+import io
+from time import sleep
+import rlx.utils as ru
+
+parser = argparse.ArgumentParser(description='monitor process cpu and mem.')
+parser.add_argument('greps', metavar='pipe', type=str, nargs='+',
+                    help="""a list of pipes to add to the ps command line.
+                    A pipe might have a label separated by '::'""")
+parser.add_argument("-n", metavar="n_samples", type=int, default=0,
+                    help="number of samples (0 == inf i default)")
+
+parser.add_argument("-i", metavar="milisecs", type=int, default=1000,
+                    help="interval between samples")
+parser.formatter_class = argparse.RawDescriptionHelpFormatter
+parser.epilog = 'example invocation (first pipe without label):\n     procmon -i 500 -n 10 "grep firefox" "plugins::grep -i firefox|grep plugin"'
+args = parser.parse_args()
+s = args.greps
+for i in s:
+    assert len(i.split("::")) < 3, "string with several '::'"
+
+pipes = {j[0]: j[-1] for j in [i.split("::") for i in s]}
+
+count = 0
+while args.n == 0 or count < args.n:
+    date = commands.getoutput("date")
+    print date,
+    for label, pipe in pipes.iteritems():
+        cmd = " ps -eo pcpu,vsz,user,comm |"+pipe
+        s = commands.getoutput(cmd)
+        d = pd.read_csv(io.StringIO(unicode(s)), delim_whitespace=True,
+                        names=["cpu", "mem", "user", "cmd"])
+        vals = d.sum().values
+        scpu = "%6.2f" % vals[0]+"%"
+        smem = ru.humanbytes(vals[1])
+        print "__", label+":: cpu %s mem %s" % (scpu, smem),
+    print
+    count += 1
+    if args.n == 0 or count < args.n:
+        sleep(args.i*1./1000)
