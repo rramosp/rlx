@@ -32,6 +32,9 @@ while args.n == 0 or count < args.n:
     for label, pipe in pipes.iteritems():
         cmd = " ps -eo pcpu,vsz,user,comm |"+pipe
         s = commands.getoutput(cmd)
+        s = " ".join([i for i in s.split(" ") if len(i) > 0])
+        s = s.split("\n")
+        s = "\n".join([" ".join(i.strip().split(" ")[:4]) for i in s])
         d = pd.read_csv(io.StringIO(unicode(s)), delim_whitespace=True,
                         names=["cpu", "mem", "user", "cmd"])
         vals = d.sum().values
