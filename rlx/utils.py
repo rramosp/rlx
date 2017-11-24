@@ -14,6 +14,7 @@ from IPython.core import display
 import contextlib
 import math
 
+
 def running_in_notebook():
     try:
         cfg = get_ipython().config
@@ -23,6 +24,31 @@ def running_in_notebook():
             return False
     except NameError:
         return False
+
+
+def read_password_protected_zip(fname):
+    import getpass, subprocess
+    pwd = getpass.getpass("input password for %s: "%fname)
+    cmd = "unzip -c -P%s %s"%(pwd, fname)
+    p = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE)
+    out, err = p.communicate()
+    out = "\n".join(out.split("\n")[2:]+["\n"]*2).strip()
+    if len(err)>0:
+        raise ValueError("error unzipping encrypted file: "+err)
+    return out
+
+def aws_S3_login(aws_credentials_zip_file):
+    import json, boto3
+    s = read_password_protected_zip(aws_credentials_zip_file)
+    aws = json.loads(s)
+
+    s3 = boto3.client(
+        's3',
+        aws_access_key_id=aws["aws_access_key"],
+        aws_secret_access_key=aws["aws_secret_key"]
+    )
+    return s3
 
 
 class mParallel(Parallel):

@@ -28,11 +28,56 @@ def create_html(out_html_file, html_template, bokeh_components={}, matplotlib_co
     fh.write(html)
     fh.close()
 
+
 def get_img_tag(fig):
     import os
 
-    fig.savefig("aa.png", transparent=True, bbox_inches='tight',pad_inches=0)
+    fig.savefig("aa.png", transparent=True, bbox_inches='tight', pad_inches=0)
     data_uri = open('aa.png', 'rb').read().encode('base64').replace('\n', '')
     img_tag = '<img src="data:image/png;base64,{0}">'.format(data_uri)
     os.remove("aa.png")
     return img_tag
+
+
+javascript_funcs = """
+function wait_element(){
+
+    var retry = 10;
+    var timeout = 250;
+    window.FX_waiting = true;
+    if(typeof window.FX_content !== "undefined"){
+        window.FX_waiting = false;
+        window["FX_success"](window.FX_content);
+    }
+    else{
+        if (window.FX_count==retry) {
+            window.FX_waiting = false;
+            window["FX_fail"]("RETR: max retries reached")
+        } else {
+            setTimeout(wait_element, timeout);
+            window.FX_count = window.FX_count + 1;
+        }
+    }
+}
+
+function on_get_url(url, function_success, function_fail) {
+    if (typeof window.FX_waiting !== "undefined"  && window.FX_waiting) {
+        function_fail("BUSY: busy waiting for previous url ... discarding")
+        return
+    }
+
+    delete window.FX_content;
+    window.FX_success = function_success;
+    window.FX_fail    = function_fail;
+    window.FX_count   = 0;
+    var s = document.createElement("script");
+    s.src = url;
+    element_id = ""+getRandomInt(1000,2000);
+    s.id = element_id;
+    document.body.appendChild(s);
+    wait_element();
+    var element = document.getElementById(element_id);
+    element.parentNode.removeChild(element);
+}
+
+"""
