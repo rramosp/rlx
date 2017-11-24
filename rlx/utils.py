@@ -317,3 +317,8 @@ def humanbytes(B):
         return '{0:.2f} GB'.format(B/GB)
     elif TB <= B:
         return '{0:.2f} TB'.format(B/TB)
+
+
+def pbar():
+    import progressbar
+    return progressbar.ProgressBar()
