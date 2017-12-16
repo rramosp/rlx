@@ -45,6 +45,7 @@ function wait_element(){
     var retry = 10;
     var timeout = 250;
     window.FX_waiting = true;
+
     if(typeof window.FX_content !== "undefined"){
         window.FX_waiting = false;
         window["FX_success"](window.FX_content);
@@ -58,6 +59,10 @@ function wait_element(){
             window.FX_count = window.FX_count + 1;
         }
     }
+}
+
+function getRandomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function on_get_url(url, function_success, function_fail) {
@@ -78,6 +83,40 @@ function on_get_url(url, function_success, function_fail) {
     wait_element();
     var element = document.getElementById(element_id);
     element.parentNode.removeChild(element);
+}
+
+
+function xcenter_map(x, y, map_width, fig_xrange, fig_yrange) {
+    // x,y:       lon, lat in meters
+    // map_width: desired map width in meters
+    // fig:       bokeh figure object containing the map
+
+    console.log("XX", fig_xrange);
+
+    r = fig.plot_width/fig.plot_height
+
+    fig.x_range.start = x-map_width/2
+    fig.x_range.end   = x+map_width/2
+
+    fig.y_range.start = y-map_width/r/2
+    fig.y_range.end   = y+map_width/r/2
+
+}
+
+
+function center_map(x, y, map_width, fig) {
+    // x,y:       lon, lat in meters
+    // map_width: desired map width in meters
+    // fig:       bokeh figure object containing the map
+
+    r = fig.plot_width/fig.plot_height
+
+    fig.x_range.start = x-map_width/2
+    fig.x_range.end   = x+map_width/2
+
+    fig.y_range.start = y-map_width/r/2
+    fig.y_range.end   = y+map_width/r/2
+
 }
 
 """

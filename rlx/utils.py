@@ -8,11 +8,16 @@ import sys
 from pygments import highlight
 from pygments.lexers import get_lexer_by_name
 from pygments.formatters import HtmlFormatter
-import re
-import inspect
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 from IPython.core import display
 import contextlib
 import math
+import progressbar
+import time
+import os
+import psutil
+import gc
 
 
 def running_in_notebook():
@@ -299,6 +304,24 @@ def mkdir(newdir):
             os.mkdir(newdir)
 
 
+def getmem(keys=["rss", "vms"], as_text=True, do_gc=False):
+    """
+    gets the memory currently used by the running Python process
+    see process.memory_info().__dict__ for additional keys
+
+    do_gc: perform garbage collection before measuring memory
+    """
+    if do_gc:
+        gc.collect()
+    process = psutil.Process(os.getpid())
+    k = process.memory_info()
+    k = {i: humanbytes(k.__dict__[i]) if as_text else k.__dict__[i] for i in keys}
+    if len(keys) == 1:
+        return k[keys[0]]
+    else:
+        return k
+
+
 def humanbytes(B):
     'Return the given bytes as a human friendly KB, MB, GB, or TB string'
     B = float(B)
@@ -320,5 +343,63 @@ def humanbytes(B):
 
 
 def pbar():
-    import progressbar
+    sys.stdout.flush()
+    sys.stderr.flush()
+    time.sleep(.2)
     return progressbar.ProgressBar()
+
+
+class _s:
+    """
+    substitute in sympy expression expr the symbols in matrix sm with values
+    in numpy matrix nm. For instance:
+
+    W      = sy.Matrix(sy.MatrixSymbol("W", 2, 2))
+    W_vals = np.random.random(W.shape)
+    _s(W**2)._s(W, W_vals).expr
+
+    """
+    def __init__(self, expr):
+        self.expr = expr
+
+    def _s(self, sm,nm):
+        self.expr = self.expr.subs({i[1]:nm.reshape(sm.shape)[i[0]] for i in np.ndenumerate(sm)})
+        return self
+
+
+def plot_heatmap(x, y, x_range=None, y_range=None, grid_size=(5,5),
+                 n_levels=20, margin=.01, **kwargs):
+    if x_range is None:
+        mx = np.abs(np.max(x)-np.min(x))*margin
+        x_range = np.min(x)-mx, np.max(x)+mx
+
+    x_bins = np.linspace(x_range[0], x_range[1], grid_size[0]+1)
+
+    if y_range is None:
+        my = np.abs(np.max(y)-np.min(x))*margin
+        y_range = np.min(y)-my, np.max(y)+my
+
+    y_bins = np.linspace(y_range[0], y_range[1], grid_size[1]+1)
+
+    x_discrete = np.digitize(x, x_bins)
+    y_discrete = np.digitize(y, y_bins)
+
+    z = np.zeros((len(y_bins), len(x_bins)))
+    for xi in range(len(x_bins)):
+        for yi in range(len(y_bins)):
+            z[yi, xi] = np.sum((x_discrete==xi)*(y_discrete==yi))
+    z = z[1:, 1:]
+    x_ticks = np.linspace(x_range[0], x_range[1], grid_size[0])
+    y_ticks = np.linspace(y_range[0], y_range[1], grid_size[1])
+    plt.contourf(x_ticks, y_ticks, z, levels=np.linspace(np.min(z), np.max(z), n_levels+1), **kwargs )
+
+
+def merge_dicts(*dict_args):
+    """
+    Given any number of dicts, shallow copy and merge into a new dict,
+    precedence goes to key value pairs in latter dicts.
+    """
+    result = {}
+    for dictionary in dict_args:
+        result.update(dictionary)
+    return result
