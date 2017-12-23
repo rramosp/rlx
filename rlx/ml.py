@@ -236,6 +236,38 @@ class KDClassifier:
     def score(self, X, y):
         return np.mean(y == self.predict(X))
 
+class Batches:
+    def __init__(self, arrays, batch_size, shuffle=False):
+        assert type(arrays)==list, "arrays must be a list of arrays"
+        assert np.std([len(i) for i in arrays])==0, "all arrays must be of the same length"
+
+        self.arrays = arrays
+        self.len = len(arrays[0])
+        self.batch_size = batch_size
+        self.idxs = np.random.permutation(np.arange(self.len)) if shuffle else np.arange(self.len)
+
+    def get(self):
+        for i in range(self.len/self.batch_size+(1 if self.len%self.batch_size!=0 else 0) ):
+            batch_start = i*self.batch_size
+            batch_end   = np.min(((batch_start + self.batch_size) , self.len))
+            yield [d[self.idxs][batch_start:batch_end] for d in self.arrays]
+
+
+def plot_2Ddata_with_boundary(predict,X,y):
+    n = 200
+    mins,maxs = np.min(X,axis=0), np.max(X,axis=0)
+    mins -= np.abs(mins)*.2
+    maxs += np.abs(maxs)*.2
+    d0 = np.linspace(mins[0], maxs[0],n)
+    d1 = np.linspace(mins[1], maxs[1],n)
+    gd0,gd1 = np.meshgrid(d0,d1)
+    D = np.hstack((gd0.reshape(-1,1), gd1.reshape(-1,1)))
+    p = (predict(D)*1.).reshape((n,n))
+    plt.contourf(gd0,gd1,p, levels=[-0.1,0.5], alpha=0.5, cmap=plt.cm.Greys)
+    plt.scatter(X[y==0][:,0], X[y==0][:,1], c="blue")
+    plt.scatter(X[y==1][:,0], X[y==1][:,1], c="red")
+
+
 class RBM:
 
     """
