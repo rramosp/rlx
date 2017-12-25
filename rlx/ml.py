@@ -156,6 +156,17 @@ def mcmc(n_samples, s, q_sampler, q_pdf, init_state_sampler,  use_logprobs=False
         r.append(xi)
     return np.r_[r], c*1./n_samples
 
+
+def confusion_matrix(true_labels, predicted_labels):
+    v = true_labels
+    p = predicted_labels
+    u = np.sort(np.unique(list(np.unique(p))+list(np.unique(v))))
+    cm = pd.DataFrame(confusion_matrix(v, p))
+    cm.index = pd.Index(u, name="true")
+    cm.columns = pd.Index(u, name="predicted")
+    return cm
+
+
 def kdensity_smoothed_histogram(x):
     if len(x.shape)!=1:
        raise ValueError("x must be a vector. found "+str(x.shape)+" dimensions")
