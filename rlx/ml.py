@@ -158,10 +158,11 @@ def mcmc(n_samples, s, q_sampler, q_pdf, init_state_sampler,  use_logprobs=False
 
 
 def confusion_matrix(true_labels, predicted_labels):
+    from sklearn.metrics import confusion_matrix as np_confusion_matrix
     v = true_labels
     p = predicted_labels
     u = np.sort(np.unique(list(np.unique(p))+list(np.unique(v))))
-    cm = pd.DataFrame(confusion_matrix(v, p))
+    cm = pd.DataFrame(np_confusion_matrix(v, p))
     cm.index = pd.Index(u, name="true")
     cm.columns = pd.Index(u, name="predicted")
     return cm
