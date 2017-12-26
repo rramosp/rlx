@@ -169,28 +169,29 @@ def confusion_matrix(true_labels, predicted_labels):
 
 
 def kdensity_smoothed_histogram(x):
-    if len(x.shape)!=1:
+    if len(x.shape) != 1:
        raise ValueError("x must be a vector. found "+str(x.shape)+" dimensions")
     x = pd.Series(x).dropna().values
-    t = np.linspace(np.min(x), np.max(x),100)
+    t = np.linspace(np.min(x), np.max(x), 100)
     p = kdensity(x)(t)
-    return t,p
+    return t, p
 
 def kdensity(x):
     import numbers
-    if len(x.shape)!=1:
-       raise ValueError("x must be a vector. found "+str(x.shape)+" dimensions")
+    if len(x.shape) != 1:
+        raise ValueError("x must be a vector. found "+str(x.shape)+" dimensions")
     stdx = np.std(x)
-    bw = 1.06*stdx*len(x)**-.2 if stdx!=0 else 1.
+    bw = 1.06*stdx*len(x)**-.2 if stdx != 0 else 1.
     kd = KernelDensity(bandwidth=bw)
-    kd.fit(x.reshape(-1,1))
+    kd.fit(x.reshape(-1, 1))
 
-    func = lambda z: np.exp(kd.score_samples(np.array(z).reshape(-1,1)))
+    func = lambda z: np.exp(kd.score_samples(np.array(z).reshape(-1, 1)))
     return func
 
 
-def plot_1D_mcmc_trace(k, p=None, title=None, x_range=None, acorr_lags=50, burnin=None):
-    kb     = k if burnin is None else k[burnin:]
+def plot_1D_mcmc_trace(k, p=None, title=None, x_range=None,
+                       acorr_lags=50, burnin=None):
+    kb = k if burnin is None else k[burnin:]
     plt.subplot2grid((1, 5), (0, 0), colspan=3)
     plt.plot(range(len(k)), k)
     if burnin is not None:
@@ -198,17 +199,17 @@ def plot_1D_mcmc_trace(k, p=None, title=None, x_range=None, acorr_lags=50, burni
     if title is not None:
         plt.title(title)
     plt.subplot2grid((1, 5), (0, 3))
-    plt.hist(kb, bins=30, alpha=.5, normed=True);
+    plt.hist(kb, bins=30, alpha=.5, normed=True)
     xr = np.linspace(np.min(kb) if x_range is None else x_range[0],
-                     np.max(kb) if x_range is None else x_range[1],100)
+                     np.max(kb) if x_range is None else x_range[1], 100)
     plt.xlim(np.min(xr), np.max(xr))
     if p is not None:
         plt.plot(xr, p(xr), color="red", lw=2, label="actual probability")
-    xt,yt = kdensity_smoothed_histogram(kb)
-    plt.plot(xt,yt,color="black", lw=2, label="density estimation")
+    xt, yt = kdensity_smoothed_histogram(kb)
+    plt.plot(xt, yt, color="black", lw=2, label="density estimation")
     plt.legend()
-    ax=plt.subplot2grid((1,5),(0,4))
-    plot_acf(kb, lags=acorr_lags, alpha=1.,ax=ax);
+    ax = plt.subplot2grid((1, 5), (0, 4))
+    plot_acf(kb, lags=acorr_lags, alpha=1., ax=ax)
 
 def plot_mcmc_vars(k, burnin=None):
     idx=int(burnin) if burnin is not None else 0
@@ -248,21 +249,52 @@ class KDClassifier:
     def score(self, X, y):
         return np.mean(y == self.predict(X))
 
+
 class Batches:
-    def __init__(self, arrays, batch_size, shuffle=False):
-        assert type(arrays)==list, "arrays must be a list of arrays"
-        assert np.std([len(i) for i in arrays])==0, "all arrays must be of the same length"
+    """
+    creates batches for a set of arrays. execution examples:
+
+        b = Batches([np.r_[range(10)]], batch_size=3, n_iters=6)
+        for i in b.get():
+            print i
+        ---
+        [array([0, 1, 2])]
+        [array([3, 4, 5])]
+        [array([6, 7, 8])]
+        [array([9])]
+        [array([0, 1, 2])]
+        [array([3, 4, 5])]
+
+    shuffle: shuffles data everytime it starts yielding batches
+    """
+    def __init__(self, arrays, batch_size, n_iters=None, shuffle=False):
+        assert type(arrays) == list, "arrays must be a list of arrays"
+        assert np.std([len(i) for i in arrays]) == 0, "all arrays must be of the same length"
 
         self.arrays = arrays
         self.len = len(arrays[0])
         self.batch_size = batch_size
-        self.idxs = np.random.permutation(np.arange(self.len)) if shuffle else np.arange(self.len)
+        self.shuffle = shuffle
+
+        self.batches_per_pass = self.len/self.batch_size+(1 if self.len%self.batch_size!=0 else 0)
+
+        self.n_iters = n_iters if n_iters is not None else self.batches_per_pass
 
     def get(self):
-        for i in range(self.len/self.batch_size+(1 if self.len%self.batch_size!=0 else 0) ):
-            batch_start = i*self.batch_size
-            batch_end   = np.min(((batch_start + self.batch_size) , self.len))
-            yield [d[self.idxs][batch_start:batch_end] for d in self.arrays]
+        iters_done = 0
+        while iters_done < self.n_iters:
+            if self.shuffle:
+                idxs = np.random.permutation(np.arange(self.len))
+                self.arrays = [d[idxs] for d in self.arrays]
+            idxs = np.random.permutation(np.arange(self.len)) if self.shuffle else np.arange(self.len)
+            for i in range(self.batches_per_pass):
+                batch_start = i*self.batch_size
+                batch_end = np.min(((batch_start + self.batch_size), self.len))
+                yield [d[batch_start:batch_end] for d in self.arrays]
+                iters_done += 1
+                if iters_done == self.n_iters:
+                    break
+
 
 
 def plot_2Ddata_with_boundary(predict,X,y):
