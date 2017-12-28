@@ -250,6 +250,23 @@ class KDClassifier:
         return np.mean(y == self.predict(X))
 
 
+def show_image_mosaic(imgs, labels, figsize=(12, 12)):
+    plt.figure(figsize=figsize)
+    for lab in np.unique(labels):
+        k = imgs[labels == lab]
+        for i, idx in enumerate(np.random.permutation(len(k))[:10]):
+            if i == 0:
+                plt.subplot(10, 11, lab*11+1)
+                plt.title("CL %d" % lab)
+                plt.plot(0, 0)
+                plt.axis("off")
+
+            img = k[idx]
+            plt.subplot(10, 11, lab*11+i+2)
+            plt.imshow(img, cmap=plt.cm.Greys_r)
+            plt.axis("off")
+
+
 class Batches:
     """
     creates batches for a set of arrays. execution examples:
