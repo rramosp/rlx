@@ -313,20 +313,95 @@ class Batches:
                     break
 
 
+def get_alexnet(num_classes):
+    from tflearn.layers.core import input_data, dropout, fully_connected
+    from tflearn.layers.conv import conv_2d, max_pool_2d
+    from tflearn.layers.normalization import local_response_normalization
+    from tflearn.layers.estimator import regression
 
-def plot_2Ddata_with_boundary(predict,X,y):
+    # Building 'AlexNet'
+    network = input_data(shape=[None, 227, 227, 3])
+
+    # conv1
+    network = conv_2d(network, 96, 11, strides=4, activation='relu', name="conv1", padding="VALID")
+    network = max_pool_2d(network, 3, strides=2, name="pool", padding="VALID")
+    network = local_response_normalization(network, name="norm1")
+
+    # conv2
+    network = conv_2d(network, 256, 5, activation='relu', name="conv2", padding="VALID")
+    network = max_pool_2d(network, 3, strides=2, padding="VALID")
+    network = local_response_normalization(network)
+
+    # conv3
+    network = conv_2d(network, 384, 3, activation='relu', name="conv3")
+
+    # conv4
+    network = conv_2d(network, 384, 3, activation='relu', name="conv4")
+
+    # conv5
+    network = conv_2d(network, 256, 3, activation='relu', name="conv5")
+    network = max_pool_2d(network, 3, strides=2)
+    network = local_response_normalization(network)
+
+    # fc6
+    network = fully_connected(network, 4096, activation='tanh', name="fc6")
+    network = dropout(network, 0.5)
+
+    # fc
+    network = fully_connected(network, 4096, activation='tanh', name="fc7")
+    network = dropout(network, 0.5)
+
+    network = fully_connected(network, num_classes, activation='softmax', restore=False, name="fc8")
+    network = regression(network, optimizer='momentum',
+                         loss='categorical_crossentropy',
+                         learning_rate=0.001)
+    return network
+
+
+"""def download_alexnet_weights(dest_dir="/tmp"):
+    url = "https://www.cs.toronto.edu/~guerzhoy/tf_alexnet/bvlc_alexnet.npy"
+    dest_file = dest_dir+"/"+url.split("/")[-1]
+    wget_cmd = "wget -c %s -o %s"%(url, dest_file)
+    !wget -c $url -O $dest_file
+    return dest_file
+"""
+def load_alexnet_weights(fname):
+    w = np.load(fname, encoding='bytes').item()
+    from rlx.utils import flatten
+    weights = {i[0]: i[1] for i in flatten([[[k+"/W:0", w[k][0]], [k+"/b:0", w[k][1]]] for k in w.keys()])}
+
+    # these weights are duplicated (AlexNet has two groups of convolutions for parallelization)
+    for k in ["conv2/W:0", "conv4/W:0", "conv5/W:0"]:
+        weights[k] = np.concatenate((weights[k], weights[k]), axis=2)
+    return weights
+
+
+def set_alexnet_weights(model, weights, verbose=False):
+    import tflearn
+    vars = {i.name: i for i in tflearn.variables.get_all_variables()}
+    for k in np.sort(weights.keys()):
+        if not k.startswith("fc8"):
+            if verbose:
+                print "setting weights in", k
+            model.set_weights(vars[k], weights[k])
+        else:
+            if verbose:
+                print "skipping weights in", k
+    return model
+
+def plot_2Ddata_with_boundary(predict, X, y):
     n = 200
-    mins,maxs = np.min(X,axis=0), np.max(X,axis=0)
+    mins, maxs = np.min(X, axis=0), np.max(X, axis=0)
     mins -= np.abs(mins)*.2
     maxs += np.abs(maxs)*.2
-    d0 = np.linspace(mins[0], maxs[0],n)
-    d1 = np.linspace(mins[1], maxs[1],n)
-    gd0,gd1 = np.meshgrid(d0,d1)
-    D = np.hstack((gd0.reshape(-1,1), gd1.reshape(-1,1)))
-    p = (predict(D)*1.).reshape((n,n))
-    plt.contourf(gd0,gd1,p, levels=[-0.1,0.5], alpha=0.5, cmap=plt.cm.Greys)
-    plt.scatter(X[y==0][:,0], X[y==0][:,1], c="blue")
-    plt.scatter(X[y==1][:,0], X[y==1][:,1], c="red")
+    d0 = np.linspace(mins[0], maxs[0], n)
+    d1 = np.linspace(mins[1], maxs[1], n)
+    gd0, gd1 = np.meshgrid(d0, d1)
+    D = np.hstack((gd0.reshape(-1, 1), gd1.reshape(-1, 1)))
+    p = (predict(D)*1.).reshape((n, n))
+    plt.contourf(gd0, gd1, p, levels=[-0.1, 0.5], alpha=0.5, cmap=plt.cm.Greys)
+    plt.scatter(X[y == 0][:, 0], X[y == 0][:, 1], c="blue")
+    plt.scatter(X[y == 1][:, 0], X[y == 1][:, 1], c="red")
 
 
 class RBM:

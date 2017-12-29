@@ -86,24 +86,6 @@ function on_get_url(url, function_success, function_fail) {
 }
 
 
-function xcenter_map(x, y, map_width, fig_xrange, fig_yrange) {
-    // x,y:       lon, lat in meters
-    // map_width: desired map width in meters
-    // fig:       bokeh figure object containing the map
-
-    console.log("XX", fig_xrange);
-
-    r = fig.plot_width/fig.plot_height
-
-    fig.x_range.start = x-map_width/2
-    fig.x_range.end   = x+map_width/2
-
-    fig.y_range.start = y-map_width/r/2
-    fig.y_range.end   = y+map_width/r/2
-
-}
-
-
 function center_map(x, y, map_width, fig) {
     // x,y:       lon, lat in meters
     // map_width: desired map width in meters
