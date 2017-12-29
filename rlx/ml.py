@@ -313,13 +313,14 @@ class Batches:
                     break
 
 
-def get_alexnet(num_classes):
+def get_alexnet(num_classes, dropout=.5):
     from tflearn.layers.core import input_data, dropout, fully_connected
     from tflearn.layers.conv import conv_2d, max_pool_2d
     from tflearn.layers.normalization import local_response_normalization
     from tflearn.layers.estimator import regression
 
     # Building 'AlexNet'
+    tf.reset_default_graph()
     network = input_data(shape=[None, 227, 227, 3])
 
     # conv1
@@ -345,11 +346,11 @@ def get_alexnet(num_classes):
 
     # fc6
     network = fully_connected(network, 4096, activation='tanh', name="fc6")
-    network = dropout(network, 0.5)
+    network = dropout(network, dropout)
 
     # fc
     network = fully_connected(network, 4096, activation='tanh', name="fc7")
-    network = dropout(network, 0.5)
+    network = dropout(network, dropout)
 
     network = fully_connected(network, num_classes, activation='softmax', restore=False, name="fc8")
     network = regression(network, optimizer='momentum',
@@ -365,6 +366,21 @@ def get_alexnet(num_classes):
     !wget -c $url -O $dest_file
     return dest_file
 """
+
+
+def show_alexnet_L1_filters(model):
+    vars = {i.name:i for i in tflearn.variables.get_all_variables()}
+    w1 = model.get_weights(vars["conv1/W:0"])
+    from rlx.utils import pbar
+    plt.figure(figsize=(6,6))
+    for i in pbar()(range(w1.shape[-1])):
+        plt.subplot(10,10,i+1)
+        img = w1[:,:,:,i]
+        img = (img-np.min(img))/(np.max(img)-np.min(img))
+        plt.imshow(img)
+        plt.axis("off")
+
+
 def load_alexnet_weights(fname):
     w = np.load(fname, encoding='bytes').item()
     from rlx.utils import flatten
