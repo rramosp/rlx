@@ -9,7 +9,7 @@ from sklearn.neighbors import KernelDensity
 from statsmodels.graphics.tsaplots import plot_acf
 import itertools
 import sympy as sy
-
+import tensorflow as tf
 
 def abs_error(estimator, X, y):
     preds = estimator.predict(X)
