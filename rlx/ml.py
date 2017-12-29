@@ -313,7 +313,7 @@ class Batches:
                     break
 
 
-def get_alexnet(num_classes, dropout=.5):
+def get_alexnet(num_classes, pkeep_dropout=.5):
     from tflearn.layers.core import input_data, dropout, fully_connected
     from tflearn.layers.conv import conv_2d, max_pool_2d
     from tflearn.layers.normalization import local_response_normalization
@@ -346,11 +346,11 @@ def get_alexnet(num_classes, dropout=.5):
 
     # fc6
     network = fully_connected(network, 4096, activation='tanh', name="fc6")
-    network = dropout(network, dropout)
+    network = dropout(network, pkeep_dropout)
 
     # fc
     network = fully_connected(network, 4096, activation='tanh', name="fc7")
-    network = dropout(network, dropout)
+    network = dropout(network, pkeep_dropout)
 
     network = fully_connected(network, num_classes, activation='softmax', restore=False, name="fc8")
     network = regression(network, optimizer='momentum',
