@@ -10,6 +10,7 @@ from statsmodels.graphics.tsaplots import plot_acf
 import itertools
 import sympy as sy
 import tensorflow as tf
+import tflearn
 
 def abs_error(estimator, X, y):
     preds = estimator.predict(X)
