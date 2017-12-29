@@ -303,7 +303,18 @@ def mkdir(newdir):
         if tail:
             os.mkdir(newdir)
 
+def command(cmd):
+    import os
+    z = os.system(cmd + " > /tmp/k.stdout 2> /tmp/k.stderr")
+    with open("/tmp/k.stdout", "rb") as f:
+        stdout = [i.rstrip() for i in f.readlines()]
+    with open("/tmp/k.stderr", "rb") as f:
+        stderr = [i.rstrip() for i in f.readlines()]
+    os.system("rm /tmp/k.stdout /tmp/k.stderr")
 
+    return z, stdout, stderr
+
+    
 def getmem(keys=["rss", "vms"], as_text=True, do_gc=False):
     """
     gets the memory currently used by the running Python process
