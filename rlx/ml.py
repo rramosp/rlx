@@ -315,7 +315,7 @@ class Batches:
 
 
 
-def get_vgg(num_classes, num_features=224):
+def get_vgg(num_classes, num_features=224, pkeep_dropout=0.5):
     from tflearn.layers.core import input_data, dropout, fully_connected
     from tflearn.layers.conv import conv_2d, max_pool_2d
     from tflearn.layers.estimator import regression
@@ -347,10 +347,10 @@ def get_vgg(num_classes, num_features=224):
     network = max_pool_2d(network, 2, strides=2, name='maxpool5')
 
     network = fully_connected(network, 4096, activation='relu', scope='fc6')
-    network = dropout(network, 0.5, name='dropout1')
+    network = dropout(network, pkeep_dropout, name='dropout1')
 
     network = fully_connected(network, 4096, activation='relu', scope='fc7')
-    network = dropout(network, 0.5, name='dropout2')
+    network = dropout(network, pkeep_dropout, name='dropout2')
 
     network = fully_connected(network, num_classes, activation='softmax', scope='fc8', restore=False)
     network = regression(network, optimizer='adam', loss='categorical_crossentropy', learning_rate=0.0001)
