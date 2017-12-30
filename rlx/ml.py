@@ -418,9 +418,9 @@ def get_alexnet(num_classes, pkeep_dropout=.5):
 """
 
 
-def show_alexnet_L1_filters(model):
+def show_filters(model, layer_name="conv1/W:0"):
     vars = {i.name:i for i in tflearn.variables.get_all_variables()}
-    w1 = model.get_weights(vars["conv1/W:0"])
+    w1 = model.get_weights(vars[layer_name])
     from rlx.utils import pbar
     plt.figure(figsize=(6,6))
     for i in pbar()(range(w1.shape[-1])):
