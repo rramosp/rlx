@@ -469,6 +469,113 @@ def plot_2Ddata_with_boundary(predict, X, y):
     plt.scatter(X[y == 0][:, 0], X[y == 0][:, 1], c="blue")
     plt.scatter(X[y == 1][:, 0], X[y == 1][:, 1], c="red")
 
+def flip_images(X_imgs):
+    from rlx.utils import pbar
+    IMAGE_SIZE_1, IMAGE_SIZE_2 = X_imgs.shape[1], X_imgs.shape[2]
+
+    X_flip = []
+    tf.reset_default_graph()
+    X = tf.placeholder(tf.float32, shape = (IMAGE_SIZE_1, IMAGE_SIZE_2, 3))
+    tf_img1 = tf.image.flip_left_right(X)
+    tf_img2 = tf.image.flip_up_down(X)
+    tf_img3 = tf.image.transpose_image(X)
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        for img in pbar()(X_imgs):
+            flipped_imgs = sess.run([tf_img1, tf_img2, tf_img3], feed_dict = {X: img})
+            X_flip.extend(flipped_imgs)
+    X_flip = np.array(X_flip, dtype = np.float32)
+    return X_flip
+
+def rotate_images(X_imgs, start_angle, end_angle, n_images):
+    from rlx.utils import pbar, flatten
+    IMAGE_SIZE_1, IMAGE_SIZE_2 = X_imgs.shape[1], X_imgs.shape[2]
+
+    X_rotate = []
+    iterate_at = (end_angle - start_angle) / (n_images - 1)
+
+    tf.reset_default_graph()
+    X = tf.placeholder(tf.float32, shape = (None, IMAGE_SIZE_1, IMAGE_SIZE_2, 3))
+    radian = tf.placeholder(tf.float32, shape = (len(X_imgs)))
+    tf_img = tf.contrib.image.rotate(X, radian)
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+
+        for index in pbar()(range(n_images)):
+            degrees_angle = start_angle + index * iterate_at
+            radian_value = degrees_angle * np.pi / 180  # Convert to radian
+            radian_arr = [radian_value] * len(X_imgs)
+            rotated_imgs = sess.run(tf_img, feed_dict = {X: X_imgs, radian: radian_arr})
+            X_rotate.extend(rotated_imgs)
+
+    X_rotate = np.array(X_rotate, dtype=np.float32)
+    X_rotate = X_rotate[np.r_[flatten([[i, i+len(X_imgs)] for i in np.arange(len(X_imgs))])]]
+    return X_rotate
+
+
+def scale_images(X_imgs, scales):
+    """
+    X_imgs: shape [n_imgs, size_x, size_y, n_channels]
+    scales: p.ej.: [.9, .5] produces 2 new images (scale <0 means larger)
+    """
+    from rlx.utils import pbar
+    IMAGE_SIZE_1, IMAGE_SIZE_2 = X_imgs.shape[1], X_imgs.shape[2]
+    # Various settings needed for Tensorflow operation
+    boxes = np.zeros((len(scales), 4), dtype=np.float32)
+    for index, scale in enumerate(scales):
+        x1 = y1 = 0.5 - 0.5 * scale  # To scale centrally
+        x2 = y2 = 0.5 + 0.5 * scale
+        boxes[index] = np.array([y1, x1, y2, x2], dtype=np.float32)
+    box_ind = np.zeros((len(scales)), dtype=np.int32)
+    crop_size = np.array([IMAGE_SIZE_1, IMAGE_SIZE_2], dtype=np.int32)
+
+    X_scale_data = []
+    tf.reset_default_graph()
+    X = tf.placeholder(tf.float32, shape=(1, IMAGE_SIZE_1, IMAGE_SIZE_2, 3))
+    # Define Tensorflow operation for all scales but only one base image at a time
+    tf_img = tf.image.crop_and_resize(X, boxes, box_ind, crop_size)
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+
+        for img_data in pbar()(X_imgs):
+            batch_img = np.expand_dims(img_data, axis=0)
+            scaled_imgs = sess.run(tf_img, feed_dict={X: batch_img})
+            X_scale_data.extend(scaled_imgs)
+
+    X_scale_data = np.array(X_scale_data, dtype=np.float32)
+    return X_scale_data
+
+def augment_imgs(imgs, dataset, prob_augment, op, opname):
+    """
+    dataset must be indexed with the image file name and must have a field
+    named "path" with the full path to the image.
+    a one to one correspondance is assumed to between imgs and entries on dataset.
+
+    returns: augmented_imgs
+             augmented_dataset: where corresponding records in the dataset
+             are copied and paths and indexes appropriated updated.
+    """
+    assert len(imgs) == len(dataset), "dataset and imgs must have the same length"
+    imgs_to_augment = np.random.permutation(len(k))[:int(len(k)*prob_augment)]
+    print "applying operation", opname
+    augmented_imgs = op(imgs[imgs_to_augment])
+
+    r  = len(augmented_imgs)/len(imgs_to_augment)
+
+    augmented_dataset = None
+
+    t = np.random.randint(len(imgs_to_augment))
+    print "saving imgs and building dataset"
+    for t in pbar()(range(len(imgs_to_augment))):
+        z  = dataset.iloc[imgs_to_augment[t]]
+        zd = pd.DataFrame([z]*r, index=["%s__%s_%d.jpg"%(z.name,opname, i) for i in range(r)])
+        zd["path"] = ["/".join(i.path.split("/")[:-1]+[i.name]) for _,i in zd[["path"]].iterrows()]
+        for i,(_,item) in enumerate(zd.iterrows()):
+            imsave(item.path, augmented_imgs[r*t+i])
+        augmented_dataset = zd if augmented_dataset is None else pd.concat((augmented_dataset, zd))
+
+    return augmented_imgs, augmented_dataset
+
 
 class RBM:
 
