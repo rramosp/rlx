@@ -542,7 +542,7 @@ def scale_images(X_imgs, scales):
             scaled_imgs = sess.run(tf_img, feed_dict={X: batch_img})
             X_scale_data.extend(scaled_imgs)
 
-    X_scale_data = np.array(X_scale_data, dtype=np.float32)
+#    X_scale_data = np.array(X_scale_data, dtype=np.float32)
     return X_scale_data
 
 def augment_imgs(imgs, dataset, prob_augment, op, opname):
