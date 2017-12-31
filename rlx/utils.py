@@ -314,7 +314,7 @@ def command(cmd):
 
     return z, stdout, stderr
 
-    
+
 def getmem(keys=["rss", "vms"], as_text=True, do_gc=False):
     """
     gets the memory currently used by the running Python process
@@ -353,11 +353,11 @@ def humanbytes(B):
         return '{0:.2f} TB'.format(B/TB)
 
 
-def pbar():
+def pbar(**kwargs):
     sys.stdout.flush()
     sys.stderr.flush()
     time.sleep(.2)
-    return progressbar.ProgressBar()
+    return progressbar.ProgressBar(**kwargs)
 
 
 class _s:

@@ -6,6 +6,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from joblib import delayed
 from sklearn.neighbors import KernelDensity
+from skimage.io import imread
 from statsmodels.graphics.tsaplots import plot_acf
 import itertools
 import sympy as sy
@@ -314,7 +315,6 @@ class Batches:
                     break
 
 
-
 def get_vgg(num_classes, num_features=224, pkeep_dropout=0.5):
     from tflearn.layers.core import input_data, dropout, fully_connected
     from tflearn.layers.conv import conv_2d, max_pool_2d
@@ -469,7 +469,7 @@ def plot_2Ddata_with_boundary(predict, X, y):
     plt.scatter(X[y == 0][:, 0], X[y == 0][:, 1], c="blue")
     plt.scatter(X[y == 1][:, 0], X[y == 1][:, 1], c="red")
 
-def flip_images(X_imgs):
+def flip_images(X_imgs, show_progress_bar=False):
     from rlx.utils import pbar
     IMAGE_SIZE_1, IMAGE_SIZE_2 = X_imgs.shape[1], X_imgs.shape[2]
 
@@ -481,13 +481,13 @@ def flip_images(X_imgs):
     tf_img3 = tf.image.transpose_image(X)
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-        for img in pbar()(X_imgs):
+        for img in (pbar()(X_imgs) if show_progress_bar else X_imgs):
             flipped_imgs = sess.run([tf_img1, tf_img2, tf_img3], feed_dict = {X: img})
             X_flip.extend(flipped_imgs)
     X_flip = np.array(X_flip, dtype = np.float32)
     return X_flip
 
-def rotate_images(X_imgs, start_angle, end_angle, n_images):
+def rotate_images(X_imgs, start_angle, end_angle, n_images, show_progress_bar=False):
     from rlx.utils import pbar, flatten
     IMAGE_SIZE_1, IMAGE_SIZE_2 = X_imgs.shape[1], X_imgs.shape[2]
 
@@ -501,7 +501,7 @@ def rotate_images(X_imgs, start_angle, end_angle, n_images):
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
 
-        for index in pbar()(range(n_images)):
+        for index in (pbar()(range(n_images)) if show_progress_bar else range(n_images)):
             degrees_angle = start_angle + index * iterate_at
             radian_value = degrees_angle * np.pi / 180  # Convert to radian
             radian_arr = [radian_value] * len(X_imgs)
@@ -513,7 +513,15 @@ def rotate_images(X_imgs, start_angle, end_angle, n_images):
     return X_rotate
 
 
-def scale_images(X_imgs, scales):
+def imread_normalized(fname):
+    """
+    reads image and normalizes pixel values to the [0,1] interval
+    """
+    r = imread(fname).astype(np.float32)
+    r = (r-np.min(r))/(np.max(r)-np.min(r))
+    return r
+
+def scale_images(X_imgs, scales, show_progress_bar=False):
     """
     X_imgs: shape [n_imgs, size_x, size_y, n_channels]
     scales: p.ej.: [.9, .5] produces 2 new images (scale <0 means larger)
@@ -537,7 +545,7 @@ def scale_images(X_imgs, scales):
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
 
-        for img_data in pbar()(X_imgs):
+        for img_data in (pbar()(X_imgs) if show_progress_bar else X_imgs):
             batch_img = np.expand_dims(img_data, axis=0)
             scaled_imgs = sess.run(tf_img, feed_dict={X: batch_img})
             X_scale_data.extend(scaled_imgs)
