@@ -558,7 +558,7 @@ def augment_imgs(imgs, dataset, prob_augment, op, opname):
     assert len(imgs) == len(dataset), "dataset and imgs must have the same length"
 
     from rlx.utils import pbar
-    from sklearn.io import imsave
+    from skimage.io import imsave
 
     imgs_to_augment = np.random.permutation(len(imgs))[:int(len(imgs)*prob_augment)]
     print "applying operation", opname
