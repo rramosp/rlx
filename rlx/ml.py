@@ -556,6 +556,9 @@ def augment_imgs(imgs, dataset, prob_augment, op, opname):
              are copied and paths and indexes appropriated updated.
     """
     assert len(imgs) == len(dataset), "dataset and imgs must have the same length"
+
+    from rlx.utils import pbar
+
     imgs_to_augment = np.random.permutation(len(imgs))[:int(len(imgs)*prob_augment)]
     print "applying operation", opname
     augmented_imgs = op(imgs[imgs_to_augment])
