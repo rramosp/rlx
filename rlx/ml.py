@@ -273,7 +273,7 @@ class Batches:
     """
     creates batches for a set of arrays. execution examples:
 
-        b = Batches([np.r_[range(10)]], batch_size=3, n_iters=6)
+        b = Batches([np.r_[range(10)]], batch_size=3, n_steps=6)
         for i in b.get():
             print i
         ---
@@ -284,34 +284,50 @@ class Batches:
         [array([0, 1, 2])]
         [array([3, 4, 5])]
 
+        or also:
+
+        for batch in ml.Batches([np.r_[range(10)]], batch_size=3, n_epochs=2).get():
+            print batch
+        ---
+        [array([0, 1, 2])]
+        [array([3, 4, 5])]
+        [array([6, 7, 8])]
+        [array([9])]
+        [array([0, 1, 2])]
+        [array([3, 4, 5])]
+        [array([6, 7, 8])]
+        [array([9])]
+
     shuffle: shuffles data everytime it starts yielding batches
     """
-    def __init__(self, arrays, batch_size, n_iters=None, shuffle=False):
+    def __init__(self, arrays, batch_size, n_steps=None, n_epochs=None, shuffle=False):
         assert type(arrays) == list, "arrays must be a list of arrays"
         assert np.std([len(i) for i in arrays]) == 0, "all arrays must be of the same length"
+        assert not (n_steps is not None and n_epochs is not None), "cannot set both n_steps and n_epochs"
+        assert not (n_steps is None and n_epochs is None), "must set either n_steps or n_epochs"
 
         self.arrays = arrays
         self.len = len(arrays[0])
         self.batch_size = batch_size
         self.shuffle = shuffle
+        self.n_epochs = n_epochs
 
-        self.batches_per_pass = self.len/self.batch_size+(1 if self.len%self.batch_size!=0 else 0)
-
-        self.n_iters = n_iters if n_iters is not None else self.batches_per_pass
+        self.steps_per_epoch = self.len/self.batch_size+(1 if self.len%self.batch_size!=0 else 0)
+        self.n_steps = n_steps if n_steps is not None else self.steps_per_epoch*self.n_epochs
 
     def get(self):
-        iters_done = 0
-        while iters_done < self.n_iters:
+        steps_done = 0
+        while steps_done < self.n_steps:
             if self.shuffle:
                 idxs = np.random.permutation(np.arange(self.len))
                 self.arrays = [d[idxs] for d in self.arrays]
             idxs = np.random.permutation(np.arange(self.len)) if self.shuffle else np.arange(self.len)
-            for i in range(self.batches_per_pass):
+            for i in range(self.steps_per_epoch):
                 batch_start = i*self.batch_size
                 batch_end = np.min(((batch_start + self.batch_size), self.len))
                 yield [d[batch_start:batch_end] for d in self.arrays]
-                iters_done += 1
-                if iters_done == self.n_iters:
+                steps_done += 1
+                if steps_done == self.n_steps:
                     break
 
 
@@ -320,7 +336,6 @@ def get_vgg(num_classes, num_features=224, pkeep_dropout=0.5):
     from tflearn.layers.conv import conv_2d, max_pool_2d
     from tflearn.layers.estimator import regression
 
-    # Building 'AlexNet'
     tf.reset_default_graph()
     network = input_data(shape=[None, num_features, num_features, 3])
     network = conv_2d(network, 64, 3, activation='relu', scope='conv1_1')

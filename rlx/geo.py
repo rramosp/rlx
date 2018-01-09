@@ -5,6 +5,7 @@ from bokeh import plotting as bp
 import pandas as pd
 import bokeh
 import shapefile
+from shapely import affinity
 
 try:
     from shapely import geometry as sg
@@ -78,10 +79,151 @@ def read_shapefile(shp_path):
     sf = shapefile.Reader(shp_path)
     fields = [x[0] for x in sf.fields][1:]
     records = sf.records()
-    shps = [s.points for s in sf.shapes()]
+    shapes  = sf.shapes()
+    coords = [np.r_[s.points] for s in shapes]
+    types  = [s.shapeType for s in shapes]
+    bboxes = [np.r_[s.bbox] for s in shapes]
 
     # write into a dataframe
     df = pd.DataFrame(columns=fields, data=records)
-    df = df.assign(coords=shps)
+    df = df.assign(coords=coords)
+    df = df.assign(bbox=bboxes)
+    df = df.assign(shape_type=types)
 
     return df
+
+def linepol_intersect(line, pol, scale=1):
+    """
+    returns a list of lines corresponding to the intersection of a shapely line and polygon.
+    in general, the intersection is a set of lines.
+    if there is no intersection it returns an empty list.
+
+    line and pol can be a list or ndarray of pairs
+
+    scale allows to scale the polygon before intersecting. scale=2 doubles the size
+    typically one would scale by 1.05 (or something small) to make sure
+    bounday lines are included in the interesection
+    
+    example:
+    
+        pol = sg.Polygon([(3., -2.0), (4.5, -1.), (5.0, -2.0), (4.0, -3.0), (3.0, -3.0), (4.0, -2.0)])
+        line = sg.LineString([[5,-3], [4,-2.5],[3.5,-2], [3,-1]])
+        lint = linpol_intersect(line, pol)
+        plt.plot(*line.xy)
+        plt.plot(*pol.boundary.xy)
+        for g in lint:
+            plt.plot(*g.xy, color="red", lw=10, alpha=.5)    
+    """
+    if type(line)==list or type(line)==np.ndarray:
+       line = sg.LineString(line)
+
+    if type(pol)==list or type(pol)==np.ndarray:
+       pol = sg.Polygon(pol)
+
+    if scale!=1:
+       pol = affinity.scale(pol, scale, scale)
+
+    lint = pol.intersection(line)
+    if type(lint)==sg.LineString:
+        return [lint]
+    elif type(lint)==sg.MultiLineString:
+        return list(lint.geoms)
+    elif type(lint)==sg.GeometryCollection:
+        return list(lint.geoms)
+    else:
+        return []
+
+
+def linespol_intersects(lines, pol, scale=1):
+    """
+    intersects a set of lines with a polygon
+    returns:
+        rlines: the lines with in the input list that intersect the polygon
+        rintersects: a True/False list signalling which lines in the input
+                     list intersected the polygon
+    """
+    
+    from rlx.utils import pbar
+    rlines, rintersects = [], []
+    for line in pbar()(lines):
+        intersection = linepol_intersect(line, pol, scale)
+        if len(intersection)>0:
+            rlines.append(intersection)
+            rintersects.append(True)
+        else:
+            rintersects.append(False)
+    return rlines, np.r_[rintersects]
+
+
+def resample_path(path, sampling_distance):
+    """
+    resamples path at constant distances
+    
+    path: a 2D nd array, each row is a 2D point
+    sampling_distance: the distance between samples in the resulting path
+    """
+    
+    def sample_at_distance(path, sampling_distance):
+        cumdists = np.cumsum(np.sqrt(np.sum((path[1:]-path[:-1])**2, axis=1)))
+        mid = np.argwhere(cumdists>sampling_distance)
+        if len(mid)>0:
+            k = mid[0][0]
+            p0=path[k]
+            p1=path[k+1]
+            r = p1-(cumdists[k]-sampling_distance)*(p1-p0)/np.linalg.norm(p1-p0)
+            return r, np.r_[[r]+list(path[k+1:])]
+
+        return path[-1], None
+
+    remaining_path = path
+    sampled_path   = [remaining_path[0]]
+    while remaining_path is not None:
+        p, remaining_path = sample_at_distance(remaining_path, sampling_distance=sampling_distance)
+        sampled_path.append(p)
+        
+    sampled_path = np.r_[sampled_path]
+    return sampled_path
+
+
+def get_javascript_google_map(map_id, api_key, lat, lon, zoom,
+                              map_type="roadmap", heatmap_data="[[]]"):
+    JS = """
+       <div id="map_##MAP_ID##" style="height: 600px; width: 100%"></div>
+
+       <script>
+
+       var map_##MAP_ID##
+       function initMap_##MAP_ID##() {
+          ##MAP_DATA##
+          window.##MAP_ID##_counter = 0;
+          map_##MAP_ID## = new google.maps.Map(document.getElementById('map_##MAP_ID##'), {
+            zoom: ##ZOOM##,
+            center: {lat: ##LAT##, lng: ##LON##},
+            mapTypeId: '##MAP_TYPE##'
+          });
+          window.heatmap_##MAP_ID## = new google.maps.visualization.HeatmapLayer({
+            data: window.##MAP_ID##_LOCS[0],
+            map: map_##MAP_ID##,
+            max_intensity: 15,
+            radius: 30
+          });
+
+       }
+
+
+       </script>
+       <script async defer
+            src="https://maps.googleapis.com/maps/api/js?key=##API_KEY##&libraries=visualization&callback=initMap_##MAP_ID##">
+       </script>
+
+    """
+
+    JS = JS.replace("##MAP_ID##", map_id) \
+        .replace("##LAT##", str(lat)) \
+        .replace("##LON##", str(lon)) \
+        .replace("##MAP_TYPE##", map_type) \
+        .replace("##API_KEY##", api_key) \
+        .replace("##MAP_DATA##", heatmap_data) \
+        .replace("##ZOOM##", str(zoom))
+
+    return JS

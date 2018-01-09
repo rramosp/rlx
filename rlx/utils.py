@@ -414,3 +414,12 @@ def merge_dicts(*dict_args):
     for dictionary in dict_args:
         result.update(dictionary)
     return result
+
+def get_http_image(url):
+    import requests
+    from cStringIO import StringIO
+    from PIL import Image
+
+    rq = requests.get(url)
+    return np.array(Image.open(StringIO(rq.content)))
+
