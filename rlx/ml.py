@@ -251,12 +251,14 @@ class KDClassifier:
     def score(self, X, y):
         return np.mean(y == self.predict(X))
 
+def show_image_mosaic(imgs, labels, figsize=(12, 12), idxs=None):
+    from rlx.utils import pbar
 
-def show_image_mosaic(imgs, labels, figsize=(12, 12)):
     plt.figure(figsize=figsize)
-    for labi,lab in enumerate(np.unique(labels)):
+    for labi,lab in pbar()([i for i in enumerate(np.unique(labels))]):
         k = imgs[labels == lab]
-        for i, idx in enumerate(np.random.permutation(len(k))[:10]):
+        idxs = idxs[:10] if idxs is not None else np.random.permutation(len(k))[:10]
+        for i, idx in enumerate(idxs):
             if i == 0:
                 plt.subplot(10, 11, labi*11+1)
                 plt.title("LABEL %d" % lab)
