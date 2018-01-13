@@ -259,7 +259,7 @@ def show_image_mosaic(imgs, labels, figsize=(12, 12)):
         for i, idx in enumerate(np.random.permutation(len(k))[:10]):
             if i == 0:
                 plt.subplot(10, 11, labi*11+1)
-                plt.title("CL %d" % lab)
+                plt.title("LABEL %d" % lab)
                 plt.plot(0, 0)
                 plt.axis("off")
 
