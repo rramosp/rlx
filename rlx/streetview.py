@@ -145,11 +145,11 @@ def get_streetview_images(requests, dest_dir, API_key):
     for reqs in pbar()(requests):
         for _, req in reqs.iterrows():
             for k in ["front", "right", "left"]:
-                fname = "sv_lat_%f_lon_%f_%s.jpg" % (req.lat, req.lon, k)
-                if not os.path.isfile(dest_dir+fname):
+                fname = dest_dir+"/sv_lat_%f_lon_%f_%s.jpg" % (req.lat, req.lon, k)
+                if not os.path.isfile(fname):
                     img = utils.get_http_image(req[k])
                     if np.max(np.histogram(img.flatten())[0])<np.product(img.shape)*.9:
-                        imsave(dest_dir+fname, img)
+                        imsave(fname, img)
                     else:
                         skipped += 1
     print "skipped", skipped, "images with more than 90% of pixels with the same value"
