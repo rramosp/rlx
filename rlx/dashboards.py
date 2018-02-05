@@ -29,12 +29,15 @@ def create_html(out_html_file, html_template, bokeh_components={}, matplotlib_co
     fh.close()
 
 
-def get_img_tag(fig):
+def get_img_tag(fig, width=None, height=None, class_tag=None):
     import os
 
     fig.savefig("aa.png", transparent=True, bbox_inches='tight', pad_inches=0)
     data_uri = open('aa.png', 'rb').read().encode('base64').replace('\n', '')
-    img_tag = '<img src="data:image/png;base64,{0}">'.format(data_uri)
+    wstr = "" if width is None else "width=%s"%str(width)
+    hstr = "" if height is None else "height=%s"%str(height)
+    cstr = "" if class_tag is None else "class='%s'"%str(class_tag)
+    img_tag = ('<img %s %s %s src="data:image/png;base64,{0}">'%(cstr, wstr, hstr)).format(data_uri)
     os.remove("aa.png")
     return img_tag
 
