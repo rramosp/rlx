@@ -18,6 +18,7 @@ import time
 import os
 import psutil
 import gc
+from pandas.api.types import is_string_dtype
 
 STANDARD_COLORS = np.r_[[
     'AliceBlue', 'Chartreuse', 'Aqua', 'Aquamarine', 'Azure', 'Beige', 'Bisque',
@@ -81,6 +82,11 @@ def aws_S3_login(aws_credentials_zip_file):
     )
     return s3
 
+def fix_unicode_columns(d):
+    for col in d.columns:
+        if is_string_dtype(d[col]):
+            d[col] = [i.decode('utf8', 'ignore') for i in d[col]]
+    return d
 
 class mParallel(Parallel):
     def _print(self, msg, msg_args):
@@ -448,4 +454,3 @@ def get_http_image(url):
 
     rq = requests.get(url)
     return np.array(Image.open(StringIO(rq.content)))
-

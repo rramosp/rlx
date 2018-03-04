@@ -4,15 +4,19 @@ from bokeh import models as bm
 from bokeh import plotting as bp
 import pandas as pd
 import bokeh
+import os
 import shapefile
 from shapely import affinity
+import shapely as sh
 from PIL import Image
 from urllib import urlopen
 import cStringIO
 import gmaps
 import matplotlib.pyplot as plt
 import itertools
-from rlx.utils import flatten
+from rlx.utils import flatten, pbar
+import utm
+import re
 
 
 try:
@@ -77,18 +81,38 @@ def base_map(tools=None, axis_visible=True, **kwargs):
     return p
 
 
-def read_shapefile(shp_path):
+def read_shapefile(shp_path, utm_zone_number=None, utm_zone_letter=None):
     """
     Read a shapefile into a Pandas dataframe with a 'coords' column holding
-    the geometry information. This uses the pyshp package
+    the geometry information. This uses the pyshp package.
+
+    If utm_zone_number and utm_zone_letter are specified it assumes coords
+    are in utm and additional column latlon_coords is created with coordinates
+    int lat lon.
     """
 
+    # shapefiles come in multipolygons, with one list of
+    # coordinates (points) and a list of indices (parts).
+    # the following function creates a list of polygons from this spec.
+    def get_partitions(shpoints, shparts):
+        ps = np.r_[shpoints]
+        pr = np.r_[shparts]
+
+        partition = []
+        parts = list(pr)+[len(ps)]
+        for i in range(len(parts)-1):
+            start, end = parts[i], parts[i+1]
+            partition.append(ps[start:end])
+
+        return partition
+
     # read file, parse out the records and shapes
+    print "reading shapefile"
     sf = shapefile.Reader(shp_path)
     fields = [x[0] for x in sf.fields][1:]
     records = sf.records()
     shapes  = sf.shapes()
-    coords = [np.r_[s.points] for s in shapes]
+    coords = [get_partitions(s.points, s.parts) for s in shapes]
     types  = [s.shapeType for s in shapes]
     bboxes = [np.r_[s.bbox] for s in shapes]
 
@@ -97,6 +121,11 @@ def read_shapefile(shp_path):
     df = df.assign(coords=coords)
     df = df.assign(bbox=bboxes)
     df = df.assign(shape_type=types)
+
+    if utm_zone_letter is not None and utm_zone_number is not None:
+        print "converting to latlon"
+        df["latlon_coords"]=[[np.r_[[utm.to_latlon(i[0],i[1], utm_zone_number, utm_zone_letter) for i in k]] for k in sc] for sc in df.coords]
+
 
     return df
 
@@ -308,15 +337,48 @@ def get_javascript_google_map(map_id, api_key, lat, lon, zoom,
 
     return JS
 
+def get_shapely_multipolygon(rawcoords):
+    """
+    rawcoords: a list of 2D arrays, each one representing a polygon
+               the first one is the outer polygon, the rest are the "holes"
+    """
+    tupleofcoords = tuple(rawcoords[0])
+    #the remaining linear rings, if any, are the coordinates of inner holes, and shapely needs these to be nested in a list
+    if len(rawcoords) > 1:
+        listofholes = list(rawcoords[1:])
+    else:
+        listofholes = []
+    #shapely defines each polygon in a multipolygon with the polygoon coordinates and the list of holes nested inside a tuple
+    eachpreppedpolygon = (tupleofcoords, listofholes)
+    #finally, the prepped coordinates need to be nested inside a list in order to be used as a star-argument for the MultiPolygon constructor.
+    preppedcoords = [[eachpreppedpolygon]]
+
+
+    shapelymultipolygon = sh.geometry.MultiPolygon(*preppedcoords)
+    return shapelymultipolygon
+
 
 class GoogleMaps_Static_Image:
+    @classmethod
+    def from_filename(cls, fname):
+        p = re.compile('(\S*)gmaps_(\S+)_(\S+)_zoom_(\d+)_(\d+)x(\d+)_([^_]+)_([^_]+).jpg').match(fname)
+        if p is None:
+            return None
+        dir, lat, lon, zoom, px, py, mtype, logo = p.groups()
+        g = GoogleMaps_Static_Image(np.float64(lat), np.float64(lon), int(zoom),
+                                        (int(px), int(py)),
+                                        mtype, savedir=dir, crop_google_logo=False)
+        g.crop_google_logo = logo=="nologo"
+        g.set_google_logo_height()
+        g.h += g.google_logo_height
+        return g
 
     def __init__(self, lat, lon, zoom, size, maptype="roadmap", apikey=None,
                  verbose=0, savedir=None, crop_google_logo=True):
 
 
-        self.lat = lat
-        self.lon = lon
+        self.lat = np.float64(lat)
+        self.lon = np.float64(lon)
         self.zoom = zoom
         self.w = size[0]
         self.h = size[1]
@@ -326,12 +388,14 @@ class GoogleMaps_Static_Image:
         self.verbose = verbose
         self.savedir = savedir
         self.crop_google_logo = crop_google_logo
-        self.google_logo_height = 20 if crop_google_logo else 0
+        self.set_google_logo_height()
 
         parallelMultiplier = np.cos(lat * np.pi / 180)
         self.degreesPerPixelX = 360. / np.power(2, self.zoom + 8)
         self.degreesPerPixelY = 360. / np.power(2, self.zoom + 8) * parallelMultiplier
 
+    def set_google_logo_height(self):
+        self.google_logo_height = 20 if self.crop_google_logo else 0
 
     def set_apikey(self, apikey):
         self.apikey = apikey
@@ -346,15 +410,30 @@ class GoogleMaps_Static_Image:
             (str(self.lat),str(self.lon),str(self.zoom), str(self.w), str(self.h), self.maptype, apikey)
         return s
 
+    def get_img_size(self):
+        return self.w, self.h-self.google_logo_height
+
     def get_img(self, apikey=None):
         if self.img is not None:
             return self.img
+
+        if os.path.isfile(self.get_fname()):
+            f = self.get_fname()
+            if self.verbose>0:
+                print "loading from file",f
+            return Image.open(f)
+
         url = self.get_url(apikey)
         if self.verbose>0:
             print "retrieving", url
         file = cStringIO.StringIO(urlopen(url).read())
         self.img = Image.open(file).crop((0,0,self.w, self.h-self.google_logo_height))
         return self.img
+
+    def get_polygon(self):
+        # polygon coordinate order is lon,lat (to facilitate x,y plotting)
+        bbox = self.get_bbox()
+        return np.r_[[bbox["NE"][::-1], bbox["NW"][::-1], bbox["SW"][::-1], bbox["SE"][::-1]]]
 
     def get_point_latlon(self, x, y):
         pointLat = self.lat - self.degreesPerPixelY * ( y - self.h / 2)
@@ -370,12 +449,20 @@ class GoogleMaps_Static_Image:
                 'NW': self.get_point_latlon(0, 0)
                }
 
-    def save(self, apikey=None, savedir=None):
-        savedir = self.savedir if savedir is None else savedir
+    def get_fname(self):
+        savedir = self.savedir
         assert savedir is not None, "must set savedir"
+        return savedir+"/gmaps_%s_%s_zoom_%s_%sx%s_%s%s.jpg"%\
+                            (str(self.lat),str(self.lon),str(self.zoom), str(self.w), str(self.h-self.google_logo_height),
+                            self.maptype, "_nologo" if self.crop_google_logo else "")
 
-        fname = savedir+"/gmaps_%s_%s_zoom_%s_%sx%s_%s.jpg"%\
-                    (str(self.lat),str(self.lon),str(self.zoom), str(self.w), str(self.h), self.maptype)
+
+    def save(self, apikey=None, overwrite=False):
+        fname = self.get_fname()
+        if not overwrite and os.path.isfile(fname):
+            if self.verbose>0:
+                print "skipping existing", fname
+            return
         if self.verbose>0:
             print "saving to", fname
         self.get_img(apikey).convert('RGB').save(fname)
@@ -425,12 +512,28 @@ class GoogleMaps_Static_Image:
         plt.close()
         return tag
 
+    def get_area(self,  units="m2"):
+        allowed_units = ["m2", "km2"]
+        assert units in allowed_units, "units must be one of "+str(allowed_units)
+        bb = self.get_bbox()
+        mne = latlon_to_meters(*bb["NE"])
+        msw = latlon_to_meters(*bb["SW"])
+        r = (mne[0]-msw[0])*(mne[1]-msw[1])
+        if units=="km2":
+            r = r/1e6
+        return r
+
+    def get_area_str(self):
+        a = self.get_area()
+        return "%d m2"%a if a<=1e4 else "%.3f km2"%(a/1e6) if a<1e5 else "%.2f km2"%(a/1e6)
+
     def __repr__(self):
         b = self.get_bbox()
         s =    "center:  lat %s, lon %s"%(str(self.lat), str(self.lon))
         s += "\nzoom:    %d"%self.zoom
-        s += "\nsize:    %dx%d px"%(self.w,self.h)
+        s += "\nsize:    %dx%d px"%(self.w,self.h-self.google_logo_height)
         s += "\nmaptype: %s"%self.maptype
+        s += "\narea:    " + self.get_area_str()
         s += "\nbbox:\n"+"\n".join(["    "+k+": "+str(v) for k,v in b.iteritems()])
         return s
 
@@ -456,8 +559,10 @@ class GoogleMaps_Static_Mosaic:
 
         # the mosaic lat,lon is the mean of the composing images centers
         from rlx.utils import flatten
-        self.lat = np.mean([i.lat for i in flatten(self.mosaic)])
-        self.lon = np.mean([i.lon for i in flatten(self.mosaic)])
+        flat =  flatten(self.mosaic)
+        self.lat = np.mean([i.lat for i in flat])
+        self.lon = np.mean([i.lon for i in flat])
+        self.bbox = self.get_bbox()
 
     def get_single_img(self):
         init_g = self.mosaic[0][0]
@@ -466,7 +571,7 @@ class GoogleMaps_Static_Mosaic:
 
         k = np.zeros((h_px*self.nh, w_px*self.nw,3)).astype(img.dtype)
 
-        for _nw,_nh in itertools.product(range(self.nw), range(self.nh)):
+        for _nw,_nh in pbar(max_value=self.nw*self.nh)(itertools.product(range(self.nw), range(self.nh))):
             k[_nh*h_px:(_nh+1)*h_px, _nw*w_px:(_nw+1)*w_px, : ] = np.array(self.mosaic[_nh][_nw].get_img().convert("RGB"))
         return Image.fromarray(k)
 
@@ -476,19 +581,28 @@ class GoogleMaps_Static_Mosaic:
             r[_nh][_nw] = self.mosaic[_nh][_nw].get_img()
         return r
 
-    def show_in_gmap(self, apikey=None, zoom=None):
+    def get_gmap_polygon(self):
+        b = self.get_bbox()
+        return gmaps.Polygon([tuple(b["NE"]), tuple(b["NW"]), tuple(b["SW"]), tuple(b["SE"])])
+
+    def show_in_gmap(self, apikey=None, zoom=None, show_grid=False):
         apikey = self.apikey if apikey is None else apikey
         assert apikey is not None, "must set apikey"
 
         zoom = self.zoom if zoom is None else zoom
         gmaps.configure(api_key=self.apikey)
-        gmap_b = [i.get_gmap_polygon() for i in flatten(self.mosaic)]
         fig = gmaps.figure(center=(self.lat, self.lon), zoom_level=zoom)
-        fig.add_layer(gmaps.drawing_layer(features=gmap_b))
+        if show_grid:
+            gmap_b = [i.get_gmap_polygon() for i in flatten(self.mosaic)]
+            fig.add_layer(gmaps.drawing_layer(features=gmap_b))
+
+        fig.add_layer(gmaps.drawing_layer(features=[self.get_gmap_polygon()]))
+
         return fig
 
-
     def get_bbox(self):
+        if hasattr(self, 'bbox') and self.bbox is not None:
+            return self.bbox
         def ops_corner(corner, oplat, oplon):
             k = np.r_[[i.get_bbox()[corner] for i in flatten(self.mosaic)]]
             return oplat(k[:,0]), oplon(k[:,1])
@@ -498,3 +612,108 @@ class GoogleMaps_Static_Mosaic:
         r["SW"] = ops_corner("SW", np.min, np.min)
         r["SE"] = ops_corner("SE", np.min, np.max)
         return r
+
+    def save(self, overwrite=False):
+        for i in pbar()(flatten(self.mosaic)):
+            i.save(overwrite=overwrite)
+
+    def get_area_str(self):
+        t = self.mosaic[0][0]
+        a = t.get_area() * self.nw*self.nh
+        return "%d m2"%a if a<=1e4 else "%.3f km2"%(a/1e6) if a<1e5 else "%.2f km2"%(a/1e6)
+
+    def __repr__(self):
+        b = self.get_bbox()
+        t = self.mosaic[0][0]
+        s =    "center:  lat %s, lon %s"%(str(self.lat), str(self.lon))
+        s += "\nzoom:    %d"%self.zoom
+        s += "\ntiles:   %d"%(self.nw*self.nh)
+        s += "\nsize:    %dx%d px"%(self.nw*t.w,self.nh*(t.h-t.google_logo_height))
+        s += "\n         %dx%d tiles (%dx%d px each)"%(self.nw,self.nh, t.w, t.h-t.google_logo_height)
+        s += "\nmaptype: %s"%t.maptype
+        s += "\narea:    " + self.get_area_str()
+        s += "\nbbox:\n"+"\n".join(["    "+k+": "+str(v) for k,v in b.iteritems()])
+        return s
+
+
+class GoogleMaps_Shapefile_Layer:
+
+    def __init__(self, layer_name, fname, utm_zone_number, utm_zone_letter):
+        self.shapefile = read_shapefile(fname, utm_zone_number=utm_zone_number, utm_zone_letter=utm_zone_letter)
+        self.fname = fname
+        self.layer_name = layer_name
+        self.utm_zone_number = utm_zone_number
+        self.utm_zone_letter = utm_zone_letter
+        print "generating polygons"
+        self.mpols = [get_shapely_multipolygon([i[:,::-1] for i in p]) for p in pbar()(self.shapefile.latlon_coords.values)]
+        self.color_function = None
+
+    def set_color_function(self, func):
+        """
+        func takes one argument which is a pd.Series representing a row from self.shapefile
+        and returns a color spec
+        """
+        self.color_function = func
+
+    def save_layer_patch_for_gmaps_img(self, gmaps_img, overlay_original=False, verbose=False):
+        assert self.color_function is not None, "must set color_function"
+
+        lname = ".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.jpg"%(self.layer_name, "_overlay" if overlay_original else "")
+        if os.path.isfile(lname):
+            if verbose:
+                print "skipping existing", lname
+            return True
+
+        bbox = sh.geometry.Polygon(gmaps_img.get_polygon())
+        si = self.shapefile.iloc[[bbox.intersects(p) for p in self.mpols]]
+
+        pols = [get_shapely_multipolygon([i[:,::-1] for i in p]) for p in si.latlon_coords.values]
+        cols = [self.color_function(i) for _, i in si.iterrows()]
+
+        if len(pols)==0:
+            if verbose:
+                print "no shapefile info for %s"%gmaps_img.get_fname()
+            return False
+        # compute bounding box for all polygons
+        union = pols[0]
+        for i in pols[1:]:
+            union = union.union(i)
+
+        import descartes
+#        union = union.intersection(bbox)
+#        x1,y1,x2,y2 = union.bounds
+#        xmin, xmax = np.min((x1,x2)), np.max((x1,x2))
+#        ymin, ymax = np.min((y1,y2)), np.max((y1,y2))
+        xmin, ymin = np.r_[[sh.geometry.mapping(bbox)["coordinates"][0]]].min(axis=1)[0]
+        xmax, ymax = np.r_[[sh.geometry.mapping(bbox)["coordinates"][0]]].max(axis=1)[0]
+        w,h = gmaps_img.get_img_size()
+
+        xscale = w/(xmax-xmin)
+        yscale = h/(ymax-ymin)
+        fig = plt.figure(figsize=(w*1./100, h*1./100), dpi=100, frameon=False)
+        ax = fig.add_subplot(111)
+
+        # intersect all polygons with bounding box and scale them to img pixels
+        for i in range(len(pols)):
+            pol = pols[i]
+            pol = pol.intersection(bbox)
+            kpol = sh.affinity.translate(pol, xoff=-xmin, yoff=-ymin)
+            kpol = sh.affinity.scale(kpol, xfact=w/(xmax-xmin), yfact=h/(ymax-ymin), origin=(0,0))
+            ax.add_patch(descartes.PolygonPatch(kpol, color=cols[i], lw=0, alpha=.3))
+
+        ax.set_xlim((0,w))
+        ax.set_ylim((0,h))
+        if overlay_original:
+            plt.imshow(np.flip(np.array(gmaps_img.get_img()), axis=0), origin="bottom")
+        ax.set_axis_off()
+        fig.subplots_adjust(bottom = 0)
+        fig.subplots_adjust(top = 1)
+        fig.subplots_adjust(right = 1)
+        fig.subplots_adjust(left = 0)
+
+        lname = ".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.jpg"%(self.layer_name, "_overlay" if overlay_original else "")
+        if verbose:
+            print "saving to", lname
+        fig.savefig(lname)
+        plt.close()
+        return True
