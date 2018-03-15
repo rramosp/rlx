@@ -638,15 +638,21 @@ class GoogleMaps_Static_Mosaic:
 
 class GoogleMaps_Shapefile_Layer:
 
-    def __init__(self, layer_name, fname, utm_zone_number, utm_zone_letter):
-        self.shapefile = read_shapefile(fname, utm_zone_number=utm_zone_number, utm_zone_letter=utm_zone_letter)
-        self.fname = fname
+    def __init__(self, layer_name, shapefile_name, utm_zone_number, utm_zone_letter):
+        self.fname = shapefile_name
         self.layer_name = layer_name
         self.utm_zone_number = utm_zone_number
         self.utm_zone_letter = utm_zone_letter
+        if shapefile_name is not None:
+            self.shapefile = read_shapefile(shapefile_name, utm_zone_number=utm_zone_number, utm_zone_letter=utm_zone_letter)
+            self.generate_polygons()
+        else:
+            self.shapefile = None
+        self.color_function = None
+
+    def generate_polygons(self):
         print "generating polygons"
         self.mpols = [get_shapely_multipolygon([i[:,::-1] for i in p]) for p in pbar()(self.shapefile.latlon_coords.values)]
-        self.color_function = None
 
     def set_color_function(self, func):
         """
@@ -655,10 +661,17 @@ class GoogleMaps_Shapefile_Layer:
         """
         self.color_function = func
 
-    def save_layer_patch_for_gmaps_img(self, gmaps_img, overlay_original=False, verbose=False):
-        assert self.color_function is not None, "must set color_function"
+    def save_layer_patches_for_gmaps_img(self, gmaps_img, kwargs_list):
+        for kwargs in kwargs_list:
+            if not self.save_layer_patch_for_gmaps_img(gmaps_img, **kwargs):
+                break
 
-        lname = ".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.jpg"%(self.layer_name, "_overlay" if overlay_original else "")
+    def save_layer_patch_for_gmaps_img(self, gmaps_img, target_dir, color_func,
+                                       suffix="", overlay_original=False, verbose=False,
+                                       default_color="white", default_alpha=1.):
+        self.set_color_function(color_func)
+
+        lname = target_dir+"/"+(".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.jpg"%(self.layer_name, suffix)).split("/")[-1]
         if os.path.isfile(lname):
             if verbose:
                 print "skipping existing", lname
@@ -668,7 +681,10 @@ class GoogleMaps_Shapefile_Layer:
         si = self.shapefile.iloc[[bbox.intersects(p) for p in self.mpols]]
 
         pols = [get_shapely_multipolygon([i[:,::-1] for i in p]) for p in si.latlon_coords.values]
-        cols = [self.color_function(i) for _, i in si.iterrows()]
+#        cols = [self.color_function(i) for _, i in si.iterrows()]
+        fcols = [self.color_function(i) for _, i in si.iterrows()]
+        cols = [i[0] if type(i)==tuple else i for i in fcols]
+        alphas = [i[1] if type(i)==tuple else 1. for i in fcols]
 
         if len(pols)==0:
             if verbose:
@@ -680,10 +696,6 @@ class GoogleMaps_Shapefile_Layer:
             union = union.union(i)
 
         import descartes
-#        union = union.intersection(bbox)
-#        x1,y1,x2,y2 = union.bounds
-#        xmin, xmax = np.min((x1,x2)), np.max((x1,x2))
-#        ymin, ymax = np.min((y1,y2)), np.max((y1,y2))
         xmin, ymin = np.r_[[sh.geometry.mapping(bbox)["coordinates"][0]]].min(axis=1)[0]
         xmax, ymax = np.r_[[sh.geometry.mapping(bbox)["coordinates"][0]]].max(axis=1)[0]
         w,h = gmaps_img.get_img_size()
@@ -693,25 +705,33 @@ class GoogleMaps_Shapefile_Layer:
         fig = plt.figure(figsize=(w*1./100, h*1./100), dpi=100, frameon=False)
         ax = fig.add_subplot(111)
 
+        # make background polygon
+        bpol = sh.geometry.Polygon(([0,0], [w,0], [w,h], [0,h]))
+
         # intersect all polygons with bounding box and scale them to img pixels
         for i in range(len(pols)):
             pol = pols[i]
             pol = pol.intersection(bbox)
             kpol = sh.affinity.translate(pol, xoff=-xmin, yoff=-ymin)
             kpol = sh.affinity.scale(kpol, xfact=w/(xmax-xmin), yfact=h/(ymax-ymin), origin=(0,0))
-            ax.add_patch(descartes.PolygonPatch(kpol, color=cols[i], lw=0, alpha=.3))
+            bpol = bpol.difference(kpol)
+            ax.add_patch(descartes.PolygonPatch(kpol, color=cols[i], lw=0, alpha=alphas[i]))
+
+        ## add remaining space as white
+        if bpol.area>0:
+            ax.add_patch(descartes.PolygonPatch(bpol, color=default_color, lw=0, alpha=default_alpha))
 
         ax.set_xlim((0,w))
         ax.set_ylim((0,h))
         if overlay_original:
             plt.imshow(np.flip(np.array(gmaps_img.get_img()), axis=0), origin="bottom")
+
         ax.set_axis_off()
         fig.subplots_adjust(bottom = 0)
         fig.subplots_adjust(top = 1)
         fig.subplots_adjust(right = 1)
         fig.subplots_adjust(left = 0)
 
-        lname = ".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.jpg"%(self.layer_name, "_overlay" if overlay_original else "")
         if verbose:
             print "saving to", lname
         fig.savefig(lname)
