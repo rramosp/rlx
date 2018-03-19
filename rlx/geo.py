@@ -17,7 +17,8 @@ import itertools
 from rlx.utils import flatten, pbar
 import utm
 import re
-
+from skimage.io import imsave, imread
+import descartes
 
 try:
     from shapely import geometry as sg
@@ -668,7 +669,8 @@ class GoogleMaps_Shapefile_Layer:
 
     def save_layer_patch_for_gmaps_img(self, gmaps_img, target_dir, color_func,
                                        suffix="", overlay_original=False, verbose=False,
-                                       default_color="white", default_alpha=1.):
+                                       default_color="white", default_alpha=1.,
+                                       single_channel_map=None):
         self.set_color_function(color_func)
 
         lname = target_dir+"/"+(".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.jpg"%(self.layer_name, suffix)).split("/")[-1]
@@ -695,7 +697,6 @@ class GoogleMaps_Shapefile_Layer:
         for i in pols[1:]:
             union = union.union(i)
 
-        import descartes
         xmin, ymin = np.r_[[sh.geometry.mapping(bbox)["coordinates"][0]]].min(axis=1)[0]
         xmax, ymax = np.r_[[sh.geometry.mapping(bbox)["coordinates"][0]]].max(axis=1)[0]
         w,h = gmaps_img.get_img_size()
@@ -736,4 +737,62 @@ class GoogleMaps_Shapefile_Layer:
             print "saving to", lname
         fig.savefig(lname)
         plt.close()
+
+        if single_channel_map is not None:
+            k = imread(lname)
+            k = convert_label_to_single_channel(k, single_channel_map)
+            imsave(lname, k)
+
         return True
+
+def convert_label_to_single_channel(multi_channel_label_img, channel_map):
+    r = (np.r_[[np.abs(multi_channel_label_img-i).sum(axis=2) for i in channel_map]].argmin(axis=0)).astype(np.uint8)
+    lmap = len(channel_map)
+    slmap = {i: int((i*255./lmap)) for i in range(lmap)}
+    # converts single channel image to a 0-255 pixel value range
+    return np.r_[[slmap[i] for i in r.flatten()]].reshape(r.shape)
+
+def convert_label_to_multi_channel(single_channel_label_img, channel_map):
+    s = single_channel_label_img.shape
+    lmap = len(channel_map)
+    # converts back 0-255 single channel to 0-num_classes
+    slmap = {int((i*255./lmap)):i for i in range(lmap)}
+    kt = np.r_[[slmap[i] for i in single_channel_label_img.flatten()]].reshape(single_channel_label_img.shape)
+    return np.r_[[channel_map[i] for i in kt.flatten()]].reshape( list(s)+[3] ).astype(np.uint8)
+
+
+
+def show_channel_map(channel_map, matplotlib_colormap=plt.cm.jet):
+    w,h = 200,100
+    tile_w = w/len(channel_map)
+    k = np.zeros((w,h,3))
+
+    fig = plt.figure(figsize=(20,2))
+    ax = fig.add_subplot(111)
+
+    for i in range(len(channel_map)):
+        p = sh.geometry.Polygon([(tile_w*i,0),(tile_w*i,h),(tile_w*(i+1),h),(tile_w*(i+1),0)])
+        ax.add_patch(descartes.PolygonPatch(p, color=tuple(np.r_[channel_map[i]]/255.), lw=0, alpha=.9))
+    plt.xlim(0,w)
+    plt.ylim(0,1)
+    plt.title("original multichannel")
+    ax.set_axis_off()
+    fig.subplots_adjust(bottom = 0)
+    fig.subplots_adjust(top = 1)
+    fig.subplots_adjust(right = 1)
+    fig.subplots_adjust(left = 0)
+    fig.savefig("/tmp/cols.jpg")
+
+    plt.figure(figsize=(20,2))
+    plt.title("single channel")
+    k = imread("/tmp/cols.jpg")
+    ks = convert_label_to_single_channel(k, channel_map)
+    plt.title("single channel, levels="+str(np.unique(ks.flatten())))
+    plt.imshow(ks, cmap=matplotlib_colormap)
+    plt.axis("off")
+
+    plt.figure(figsize=(20,2))
+    plt.title("recovered multichannel")
+    kk = convert_label_to_multi_channel(ks, channel_map)
+    plt.imshow(kk, cmap=matplotlib_colormap)
+    plt.axis("off")
