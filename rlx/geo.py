@@ -709,6 +709,7 @@ class GoogleMaps_Shapefile_Layer:
         bpol = sh.geometry.Polygon(([0,0], [w,0], [w,h], [0,h]))
 
         # intersect all polygons with bounding box and scale them to img pixels
+        used_colors = []
         for i in range(len(pols)):
             pol = pols[i]
             pol = pol.intersection(bbox)
@@ -716,6 +717,10 @@ class GoogleMaps_Shapefile_Layer:
             kpol = sh.affinity.scale(kpol, xfact=w/(xmax-xmin), yfact=h/(ymax-ymin), origin=(0,0))
             bpol = bpol.difference(kpol)
             ax.add_patch(descartes.PolygonPatch(kpol, color=cols[i], lw=0, alpha=alphas[i]))
+            used_colors.append(str(cols[i]))
+
+        used_colors = np.unique(used_colors)
+        print "nb classes", len(used_colors), used_colors
 
         ## add remaining space as white
         if bpol.area>0:
@@ -742,7 +747,6 @@ class GoogleMaps_Shapefile_Layer:
             k = imread(lname)
             k = convert_label_to_single_channel(k, single_channel_map)
             imsave(lname, k)
-            return k
 
         return True
 
