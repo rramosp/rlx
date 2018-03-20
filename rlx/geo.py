@@ -640,6 +640,7 @@ class GoogleMaps_Static_Mosaic:
 class GoogleMaps_Shapefile_Layer:
 
     def __init__(self, layer_name, shapefile_name, utm_zone_number, utm_zone_letter):
+        print "XX INIT"
         self.fname = shapefile_name
         self.layer_name = layer_name
         self.utm_zone_number = utm_zone_number
@@ -672,7 +673,7 @@ class GoogleMaps_Shapefile_Layer:
                                        default_color="white", default_alpha=1.,
                                        single_channel_map=None):
         self.set_color_function(color_func)
-
+        print single_channel_map
         lname = target_dir+"/"+(".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.jpg"%(self.layer_name, suffix)).split("/")[-1]
         if os.path.isfile(lname):
             if verbose:
@@ -683,7 +684,6 @@ class GoogleMaps_Shapefile_Layer:
         si = self.shapefile.iloc[[bbox.intersects(p) for p in self.mpols]]
 
         pols = [get_shapely_multipolygon([i[:,::-1] for i in p]) for p in si.latlon_coords.values]
-#        cols = [self.color_function(i) for _, i in si.iterrows()]
         fcols = [self.color_function(i) for _, i in si.iterrows()]
         cols = [i[0] if type(i)==tuple else i for i in fcols]
         alphas = [i[1] if type(i)==tuple else 1. for i in fcols]
@@ -738,10 +738,13 @@ class GoogleMaps_Shapefile_Layer:
         fig.savefig(lname)
         plt.close()
 
+        print "XX", single_channel_map
         if single_channel_map is not None:
+            print "saving single channel"
             k = imread(lname)
             k = convert_label_to_single_channel(k, single_channel_map)
             imsave(lname, k)
+            return k
 
         return True
 
