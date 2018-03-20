@@ -640,7 +640,6 @@ class GoogleMaps_Static_Mosaic:
 class GoogleMaps_Shapefile_Layer:
 
     def __init__(self, layer_name, shapefile_name, utm_zone_number, utm_zone_letter):
-        print "XX INIT"
         self.fname = shapefile_name
         self.layer_name = layer_name
         self.utm_zone_number = utm_zone_number
@@ -671,10 +670,10 @@ class GoogleMaps_Shapefile_Layer:
     def save_layer_patch_for_gmaps_img(self, gmaps_img, target_dir, color_func,
                                        suffix="", overlay_original=False, verbose=False,
                                        default_color="white", default_alpha=1.,
-                                       single_channel_map=None):
+                                       single_channel_map=None, format="jpg"):
         self.set_color_function(color_func)
-        print single_channel_map
-        lname = target_dir+"/"+(".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.jpg"%(self.layer_name, suffix)).split("/")[-1]
+
+        lname = target_dir+"/"+(".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.%s"%(self.layer_name, suffix, format)).split("/")[-1]
         if os.path.isfile(lname):
             if verbose:
                 print "skipping existing", lname
@@ -738,7 +737,6 @@ class GoogleMaps_Shapefile_Layer:
         fig.savefig(lname)
         plt.close()
 
-        print "XX", single_channel_map
         if single_channel_map is not None:
             print "saving single channel"
             k = imread(lname)
