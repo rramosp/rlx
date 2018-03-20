@@ -747,6 +747,10 @@ class GoogleMaps_Shapefile_Layer:
         return True
 
 def convert_label_to_single_channel(multi_channel_label_img, channel_map):
+    assert len(multi_channel_label_img.shape)==3, "img must be multichannel"
+
+    if multi_channel_label_img.shape[2]==4:
+        multi_channel_label_img = multi_channel_label_img[:,:,:3]
     r = (np.r_[[np.abs(multi_channel_label_img-i).sum(axis=2) for i in channel_map]].argmin(axis=0)).astype(np.uint8)
     lmap = len(channel_map)
     slmap = {i: int((i*255./lmap)) for i in range(lmap)}
