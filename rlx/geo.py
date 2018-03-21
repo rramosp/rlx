@@ -723,6 +723,8 @@ class GoogleMaps_Shapefile_Layer:
         used_colors = np.unique(used_colors)
 
         ## if not enough classes skip it
+        if verbose:
+            print "found %d classes in %s"%(len(used_colors), gmaps_img.get_fname())
         if min_classes_per_img is not None and len(used_colors)< min_classes_per_img:
             if verbose:
                 print "not enough classes (%d found) in %s"%(len(used_colors), gmaps_img.get_fname())
