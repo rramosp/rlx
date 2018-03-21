@@ -746,7 +746,7 @@ class GoogleMaps_Shapefile_Layer:
             print "saving single channel"
             k = imread(lname)
             k = convert_label_to_single_channel(k, single_channel_map)
-            k = most_common_neighbour(k, (4,4))
+            k = most_common_neighbour(k, (6,6))
             imsave(lname, k)
 
         return True
