@@ -454,3 +454,30 @@ def get_http_image(url):
 
     rq = requests.get(url)
     return np.array(Image.open(StringIO(rq.content)))
+
+
+def most_common(lst):
+    return max(set(lst), key=lst.count)
+
+def rolling_window(img, shape):
+    """
+    extracts 1-stride rolling windows of shape over the input img (2D numpy array)
+    """
+    a = img
+    s = (a.shape[0] - shape[0] + 1,) + (a.shape[1] - shape[1] + 1,) + shape
+    strides = a.strides + a.strides
+    return np.lib.stride_tricks.as_strided(a, shape=s, strides=strides)
+
+def most_common_neighbour(img, window_size):
+    """
+    returns an image where each pixel is replaced with the most frequently
+    occurring value within its neighbourhood
+    """
+    s1,s2 = window_size
+    # pad image to ensure result is the same size as input
+    z = np.pad(img, ((s1/2,s1-s1/2-1),(s2/2,s2-s2/2-1)), "reflect")
+    rw = rolling_window(z,(s1,s2))
+    r = np.zeros(img.shape).astype(img.dtype)
+    for y,x in itertools.product(range(rw.shape[0]), range(rw.shape[1])):
+        r[y,x]=most_common(list(rw[y,x].flatten()))
+    return r
