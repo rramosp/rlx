@@ -742,7 +742,6 @@ class GoogleMaps_Shapefile_Layer:
         plt.close()
 
         if single_channel_map is not None:
-            print "saving single channel"
             k = imread(lname)
             k = convert_label_to_single_channel(k, single_channel_map)
             k = most_common_neighbour(k, (6,6))
