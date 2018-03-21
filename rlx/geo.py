@@ -720,7 +720,6 @@ class GoogleMaps_Shapefile_Layer:
             used_colors.append(str(cols[i]))
 
         used_colors = np.unique(used_colors)
-        print "nb classes", len(used_colors), used_colors
 
         ## add remaining space as white
         if bpol.area>0:
