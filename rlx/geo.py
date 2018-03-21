@@ -670,7 +670,8 @@ class GoogleMaps_Shapefile_Layer:
     def save_layer_patch_for_gmaps_img(self, gmaps_img, target_dir, color_func,
                                        suffix="", overlay_original=False, verbose=False,
                                        default_color="white", default_alpha=1.,
-                                       single_channel_map=None, format="jpg"):
+                                       single_channel_map=None, format="jpg",
+                                       min_classes_per_img=None):
         self.set_color_function(color_func)
 
         lname = target_dir+"/"+(".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.%s"%(self.layer_name, suffix, format)).split("/")[-1]
@@ -689,7 +690,7 @@ class GoogleMaps_Shapefile_Layer:
 
         if len(pols)==0:
             if verbose:
-                print "no shapefile info for %s"%gmaps_img.get_fname()
+                print "no intersecting polygons in shapefile for %s"%gmaps_img.get_fname()
             return False
         # compute bounding box for all polygons
         union = pols[0]
@@ -720,6 +721,12 @@ class GoogleMaps_Shapefile_Layer:
             used_colors.append(str(cols[i]))
 
         used_colors = np.unique(used_colors)
+
+        ## if not enough classes skip it
+        if min_classes_per_img is not None and len(used_colors)< min_classes_per_img:
+            if verbose:
+                print "not enough classes (%d found) in %s"%(len(used_colors), gmaps_img.get_fname())
+            return False
 
         ## add remaining space as white
         if bpol.area>0:
