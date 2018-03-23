@@ -671,7 +671,7 @@ class GoogleMaps_Shapefile_Layer:
                                        suffix="", overlay_original=False, verbose=False,
                                        default_color="white", default_alpha=1.,
                                        single_channel_map=None, format="jpg",
-                                       min_classes_per_img=None):
+                                       min_classes_per_img=None, use_255_range_in_single_channel=True):
         self.set_color_function(color_func)
 
         lname = target_dir+"/"+(".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.%s"%(self.layer_name, suffix, format)).split("/")[-1]
@@ -728,6 +728,7 @@ class GoogleMaps_Shapefile_Layer:
         if min_classes_per_img is not None and len(used_colors)< min_classes_per_img:
             if verbose:
                 print "not enough classes (%d found) in %s"%(len(used_colors), gmaps_img.get_fname())
+            plt.close()
             return False
 
         ## add remaining space as white
@@ -752,34 +753,41 @@ class GoogleMaps_Shapefile_Layer:
 
         if single_channel_map is not None:
             k = imread(lname)
-            k = convert_label_to_single_channel(k, single_channel_map)
+            k = convert_label_to_single_channel(k, single_channel_map, use_255_range_in_single_channel)
             k = most_common_neighbour(k, (6,6))
             imsave(lname, k)
 
         return True
 
-def convert_label_to_single_channel(multi_channel_label_img, channel_map):
+def convert_label_to_single_channel(multi_channel_label_img, channel_map, use_255_range=True):
     assert len(multi_channel_label_img.shape)==3, "img must be multichannel"
 
     if multi_channel_label_img.shape[2]==4:
         multi_channel_label_img = multi_channel_label_img[:,:,:3]
     r = (np.r_[[np.abs(multi_channel_label_img-i).sum(axis=2) for i in channel_map]].argmin(axis=0)).astype(np.uint8)
-    lmap = len(channel_map)
-    slmap = {i: int((i*255./lmap)) for i in range(lmap)}
-    # converts single channel image to a 0-255 pixel value range
-    return np.r_[[slmap[i] for i in r.flatten()]].reshape(r.shape)
+    if use_255_range:
+        lmap = len(channel_map)
+        slmap = {i: int((i*255./lmap)) for i in range(lmap)}
+        # converts single channel image to a 0-255 pixel value range
+        r = np.r_[[slmap[i] for i in r.flatten()]].reshape(r.shape)
+    return r
 
-def convert_label_to_multi_channel(single_channel_label_img, channel_map):
+def convert_label_to_multi_channel(single_channel_label_img, channel_map, use_255_range=True):
     s = single_channel_label_img.shape
+    sf = single_channel_label_img.flatten()
     lmap = len(channel_map)
-    # converts back 0-255 single channel to 0-num_classes
-    slmap = {int((i*255./lmap)):i for i in range(lmap)}
-    kt = np.r_[[slmap[i] for i in single_channel_label_img.flatten()]].reshape(single_channel_label_img.shape)
+    if use_255_range:
+        # converts back 0-255 single channel to 0-num_classes
+        slmap = {int((i*255./lmap)):i for i in range(lmap)}
+    else:
+        slmap = {i:i for i in range(lmap)}
+
+    kt = np.r_[[slmap[i] for i in sf]].reshape(single_channel_label_img.shape)
     return np.r_[[channel_map[i] for i in kt.flatten()]].reshape( list(s)+[3] ).astype(np.uint8)
 
 
 
-def show_channel_map(channel_map, matplotlib_colormap=plt.cm.jet):
+def show_channel_map(channel_map, matplotlib_colormap=plt.cm.jet, use_255_range=True):
     w,h = 200,100
     tile_w = w/len(channel_map)
     k = np.zeros((w,h,3))
@@ -803,13 +811,13 @@ def show_channel_map(channel_map, matplotlib_colormap=plt.cm.jet):
     plt.figure(figsize=(20,2))
     plt.title("single channel")
     k = imread("/tmp/cols.jpg")
-    ks = convert_label_to_single_channel(k, channel_map)
+    ks = convert_label_to_single_channel(k, channel_map, use_255_range)
     plt.title("single channel, levels="+str(np.unique(ks.flatten())))
     plt.imshow(ks, cmap=matplotlib_colormap)
     plt.axis("off")
 
     plt.figure(figsize=(20,2))
     plt.title("recovered multichannel")
-    kk = convert_label_to_multi_channel(ks, channel_map)
+    kk = convert_label_to_multi_channel(ks, channel_map, use_255_range)
     plt.imshow(kk, cmap=matplotlib_colormap)
     plt.axis("off")
