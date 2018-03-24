@@ -14,7 +14,7 @@ if sys.version[0]=='3':
     from urllib.request import urlopen
 else:
     from urllib import urlopen
-import cStringIO
+from io import BytesIO
 import gmaps
 import matplotlib.pyplot as plt
 import itertools
@@ -431,7 +431,7 @@ class GoogleMaps_Static_Image:
         url = self.get_url(apikey)
         if self.verbose>0:
             print ("retrieving", url)
-        file = cStringIO.StringIO(urlopen(url).read())
+        file = BytesIO(urlopen(url).read())
         self.img = Image.open(file).crop((0,0,self.w, self.h-self.google_logo_height))
         return self.img
 
