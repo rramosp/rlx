@@ -108,7 +108,7 @@ def read_shapefile(shp_path, utm_zone_number=None, utm_zone_letter=None):
         return partition
 
     # read file, parse out the records and shapes
-    print "reading shapefile"
+    print ("reading shapefile")
     sf = shapefile.Reader(shp_path)
     fields = [x[0] for x in sf.fields][1:]
     records = sf.records()
@@ -124,7 +124,7 @@ def read_shapefile(shp_path, utm_zone_number=None, utm_zone_letter=None):
     df = df.assign(shape_type=types)
 
     if utm_zone_letter is not None and utm_zone_number is not None:
-        print "converting to latlon"
+        print ("converting to latlon")
         df["latlon_coords"]=[[np.r_[[utm.to_latlon(i[0],i[1], utm_zone_number, utm_zone_letter) for i in k]] for k in sc] for sc in df.coords]
 
 
@@ -421,12 +421,12 @@ class GoogleMaps_Static_Image:
         if os.path.isfile(self.get_fname()):
             f = self.get_fname()
             if self.verbose>0:
-                print "loading from file",f
+                print ("loading from file",f)
             return Image.open(f)
 
         url = self.get_url(apikey)
         if self.verbose>0:
-            print "retrieving", url
+            print ("retrieving", url)
         file = cStringIO.StringIO(urlopen(url).read())
         self.img = Image.open(file).crop((0,0,self.w, self.h-self.google_logo_height))
         return self.img
@@ -462,10 +462,10 @@ class GoogleMaps_Static_Image:
         fname = self.get_fname()
         if not overwrite and os.path.isfile(fname):
             if self.verbose>0:
-                print "skipping existing", fname
+                print ("skipping existing", fname)
             return
         if self.verbose>0:
-            print "saving to", fname
+            print ("saving to", fname)
         self.get_img(apikey).convert('RGB').save(fname)
 
     def copy_to(self, lat, lon):
@@ -652,7 +652,7 @@ class GoogleMaps_Shapefile_Layer:
         self.color_function = None
 
     def generate_polygons(self):
-        print "generating polygons"
+        print ("generating polygons")
         self.mpols = [get_shapely_multipolygon([i[:,::-1] for i in p]) for p in pbar()(self.shapefile.latlon_coords.values)]
 
     def set_color_function(self, func):
@@ -677,7 +677,7 @@ class GoogleMaps_Shapefile_Layer:
         lname = target_dir+"/"+(".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.%s"%(self.layer_name, suffix, format)).split("/")[-1]
         if os.path.isfile(lname):
             if verbose:
-                print "skipping existing", lname
+                print ("skipping existing", lname)
             return True
 
         bbox = sh.geometry.Polygon(gmaps_img.get_polygon())
@@ -690,7 +690,7 @@ class GoogleMaps_Shapefile_Layer:
 
         if len(pols)==0:
             if verbose:
-                print "no intersecting polygons in shapefile for %s"%gmaps_img.get_fname()
+                print ("no intersecting polygons in shapefile for %s"%gmaps_img.get_fname())
             return False
         # compute bounding box for all polygons
         union = pols[0]
@@ -724,10 +724,10 @@ class GoogleMaps_Shapefile_Layer:
 
         ## if not enough classes skip it
         if verbose:
-            print "found %d classes (min is %d) in %s"%(len(used_colors), min_classes_per_img, gmaps_img.get_fname())
+            print ("found %d classes (min is %d) in %s"%(len(used_colors), min_classes_per_img, gmaps_img.get_fname()))
         if min_classes_per_img is not None and len(used_colors)< min_classes_per_img:
             if verbose:
-                print "not enough classes (%d found) in %s"%(len(used_colors), gmaps_img.get_fname())
+                print ("not enough classes (%d found) in %s"%(len(used_colors), gmaps_img.get_fname()))
             plt.close()
             return False
 
@@ -747,7 +747,7 @@ class GoogleMaps_Shapefile_Layer:
         fig.subplots_adjust(left = 0)
 
         if verbose:
-            print "saving to", lname
+            print ("saving to", lname)
         fig.savefig(lname)
         plt.close()
 
