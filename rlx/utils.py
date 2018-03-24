@@ -475,7 +475,7 @@ def most_common_neighbour(img, window_size):
     """
     s1,s2 = window_size
     # pad image to ensure result is the same size as input
-    z = np.pad(img, ((s1/2,s1-s1/2-1),(s2/2,s2-s2/2-1)), "reflect")
+    z = np.pad(img, (int(s1/2,s1-s1/2-1),int(s2/2,s2-s2/2-1)), "reflect")
     rw = rolling_window(z,(s1,s2))
     r = np.zeros(img.shape).astype(img.dtype)
     for y,x in itertools.product(range(rw.shape[0]), range(rw.shape[1])):
