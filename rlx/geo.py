@@ -10,8 +10,8 @@ from shapely import affinity
 import shapely as sh
 from PIL import Image
 import sys
-if sys,version[0]=='3':
-    from urllib.request import urlopen    
+if sys.version[0]=='3':
+    from urllib.request import urlopen
 else:
     from urllib import urlopen
 import cStringIO
