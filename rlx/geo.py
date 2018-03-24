@@ -9,7 +9,11 @@ import shapefile
 from shapely import affinity
 import shapely as sh
 from PIL import Image
-from urllib import urlopen
+import sys
+if sys,version[0]=='3':
+    from urllib.request import urlopen    
+else:
+    from urllib import urlopen
 import cStringIO
 import gmaps
 import matplotlib.pyplot as plt
