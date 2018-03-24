@@ -23,8 +23,8 @@ import descartes
 try:
     from shapely import geometry as sg
 except OSError as err:
-    print "WARN! could not load shapely library"
-    print err
+    print ("WARN! could not load shapely library")
+    print (err)
 
 def latlon_to_meters(lats, lons):
     origin_shift = 2 * np.pi * 6378137 / 2.0
