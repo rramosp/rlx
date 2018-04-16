@@ -1281,6 +1281,7 @@ def katana_polygon_split(geometry, threshold, count=0):
 
 
 def read_googlemaps_kml(kml_file):
+    from fastkml import kml
     with open(kml_file, 'rt') as f:
         area = kml.KML()
         area.from_string(f.read())
@@ -1292,7 +1293,7 @@ def read_googlemaps_kml(kml_file):
 
     area = sh.geometry.Polygon(coords)    
     return area
-    
+
 class XGoogleMaps_Static_Image:
     @classmethod
     def from_filename(cls, fname):
