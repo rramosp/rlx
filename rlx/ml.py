@@ -12,6 +12,14 @@ import itertools
 import sympy as sy
 import tensorflow as tf
 import tflearn
+import shapely as sh
+import geopandas as gpd
+import descartes
+from PIL import Image
+from rlx import geo
+from skimage.morphology import disk
+from skimage.filters.rank import enhance_contrast_percentile
+
 
 def abs_error(estimator, X, y):
     preds = estimator.predict(X)
@@ -956,3 +964,187 @@ class RBM:
         plt.xlabel("optimization iteration")
         plt.legend(loc="lower left")
         plt.grid()
+
+class Segmentation_Label_Map:
+
+    def __init__(self, ref_geodf=None):
+        self.init_labelmap()
+        self.ref_geodf=ref_geodf
+        self.current_intersection = None
+        self.current_tile = None
+
+    def set_ref_geodf(self, ref_geodf):
+        self.ref_geodf = ref_geodf
+
+    def get_default_rgb(self):
+        return (1.,1.,1.)
+
+    def init_labelmap(self):
+        raise NotImplementedError
+
+        """
+        subclasses must implement this method so that self.labelmap is a Pandas DataFrame
+        with a label definition for each row such as in the following example implementation.
+        - RGB colors MUST be triplets with values between 0 and 1
+        - mandatory columns are "rgb" and "name", the rest of the columns are to be used
+          in other methods in the same sub class
+        """
+        cat_cols = [[255,   0,   0], # red
+                    [255,   0, 255], # magenta
+                    [255, 128, 64],  # orange
+                    [  0,   0, 255], # blue
+                    [  0, 255,   0], # green
+                    [  0, 128, 255], # cyan
+                    [255, 255, 255], # white
+                    [  0,   0,   0]] # black
+
+        cat_names = ["constr sobre", "constr bajo", "zona deport", "piscina/estanque",
+                     "solar/patio", "parcela rustica", "sin parcela", "unknown"]
+        cat_codes = [11,12,13,14,15,16,0,-1]
+
+        self.labelmap = pd.DataFrame([cat_cols, cat_codes, cat_names], index=pd.Index(["rgb", "code", "name"])).T
+        self.labelmap["rgb"] = [np.r_[i]/255. if np.max(i)>1 else i for i in self.labelmap.rgb]
+
+    def geometry_label(self, gs):
+        """
+        abstract method
+        gs: a pandas GeoSeries
+        returns: an index representing one row of the labelmap dataframe
+        """
+        raise NotImplementedError
+
+    def create_contrast_image(self):
+        im, si = 3,4
+        w = (im+si)*4+im
+        h = (im+si)*int(np.ceil(len(self.labelmap)/4.))+im
+        k = np.zeros((h,w*len(self.labelmap),3))
+        for i in range(len(self.labelmap)):
+            k[:,i*w:(i+1)*w] = self.labelmap.iloc[i].rgb
+            y,x = im, im+i*w
+            for j in range(len(self.labelmap)):
+                k[y:y+si, x:x+si] = self.labelmap.iloc[j].rgb
+                x+=si+im
+                if x>=(i+1)*w:
+                    y+=im+si
+                    x=im+i*w
+            
+        return k
+
+    def show_labels(self):
+        img = self.create_contrast_image()
+        k = geo.SampleTile(img)
+        plt.figure(figsize=(20,2*np.ceil(len(self.labelmap)/4.)))
+        plt.subplot(211)
+        plt.imshow(k.get_img())
+        plt.title("rgb labels")
+        plt.axis("off")
+        plt.subplot(212)
+        plt.imshow(self.get_labels_from_tile(k).get_img())
+        plt.title("single channel labels")
+        plt.axis("off")
+
+    def set_tile(self, tile, show_progress=True):
+        assert self.ref_geodf is not None, "must set reference geodataframe"
+        self.current_tile = tile
+        self.current_intersection = tile.intersection(self.ref_geodf, show_progress=show_progress)
+
+    def apply_to_tile(self, geometries_alpha=0.5, show_tile=True, tile_alpha=1., 
+                      default_alpha=1., **kwargs):
+        """
+        embeds geometries from ref_geodf into a single image
+        tile: the tile to apply to, if None will use last tile
+        returns: an image with the geometries embedded
+        """
+        assert self.current_tile is not None, "must call 'set_tile' before"
+
+        tile = self.current_tile
+        gf   = self.current_intersection
+
+        default_color=self.get_default_rgb()
+
+        # first scale geometries to image pixel range
+        pol = tile.get_polygon()
+        xmin, ymin = np.array(pol.exterior.xy).min(axis=1)
+        xmax, ymax = np.array(pol.exterior.xy).max(axis=1)
+
+        if len(gf)==0:
+            kpol = sh.affinity.translate(pol, xoff=-xmin, yoff=-ymin)
+            kpol = sh.affinity.scale(kpol, xfact=tile.w*1./(xmax-xmin), yfact=tile.h*1./(ymax-ymin), origin=(0,0))
+            pols = [kpol]
+            colors = [default_color]
+
+        else:
+            pols   = []
+            colors = []
+            for c,i in enumerate(gf.geometry):
+                kpol = sh.affinity.translate(i, xoff=-xmin, yoff=-ymin)
+                kpol = sh.affinity.scale(kpol, xfact=tile.w*1./(xmax-xmin), yfact=tile.h*1./(ymax-ymin), origin=(0,0))
+                pols.append(kpol)
+                colors.append(self.geometry_label(gf.iloc[c]).rgb)
+
+        ki = gpd.GeoSeries(pols)
+        minx, miny, maxx, maxy = ki.total_bounds
+
+        fig = plt.figure(figsize=(tile.w*1./100, tile.h*1./100), dpi=100., frameon=True)
+        fig.set_facecolor('none')
+        ax = plt.gca()
+
+        # paint image
+        if show_tile:
+#            nimg = np.flip(np.array(tile.get_img().convert("RGB")), axis=0)
+            ax.imshow(np.flip(tile.get_img(), axis=0), alpha=tile_alpha)
+
+        # make background polygon
+        bpol = sh.geometry.Polygon(([0,0], [tile.w,0], [tile.w,tile.h], [0,tile.h]))
+
+        # paint allpolygons
+        for i in range(len(pols)):
+            kpol = pols[i]
+            ax.add_patch(descartes.PolygonPatch(kpol, color=colors[i],
+                                                lw=1, alpha=geometries_alpha))
+            bpol = bpol.difference(kpol)
+
+        ## add remaining space with default color
+        if bpol.area>0:
+            ax.add_patch(descartes.PolygonPatch(bpol, color=default_color, lw=0, alpha=default_alpha))
+
+
+        plt.axis("off")
+        plt.margins(0,0)
+        plt.xlim(0,tile.w)
+        plt.ylim(0,tile.h)
+        plt.subplots_adjust(left=0, right=1., top=1., bottom=0)
+        fig.canvas.draw()
+        image = Image.fromarray(np.array(fig.canvas.renderer._renderer))
+        image = image.resize(image.size, Image.ANTIALIAS)
+        image = np.array(image.convert("RGB"))
+        r = np.zeros(image.shape).astype("uint8")
+        for i in range(3):      
+            r[:,:,i] = enhance_contrast_percentile(image[:,:,i], disk(2), p0=.1, p1=.9)
+
+        plt.close()
+
+        r = geo.GeneratedTile.from_image(r, tile, **kwargs)
+
+        return r
+
+    def get_labels_as_rgb(self):
+        assert self.current_tile is not None, "must call 'set_tile' before"
+        return self.apply_to_tile(show_tile=False, geometries_alpha=1.)
+
+    def get_labels(self):
+        assert self.current_tile is not None, "must call 'set_tile' before"
+        r = self.get_labels_as_rgb()
+        r = self.get_labels_from_tile(r)
+        r.format = "png"
+        return r
+
+    def get_labels_from_tile(self, tile):
+        """
+        method to get labels directly from tile without intersecting geometry
+        """
+        r = tile.get_img()
+        r = (np.r_[[np.abs(r-i).sum(axis=2) for i in self.labelmap.rgb.values]].argmin(axis=0)).astype(np.uint8)
+        r = geo.GeneratedTile.from_image(r, tile)
+        return r
+

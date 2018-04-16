@@ -18,11 +18,21 @@ from io import BytesIO
 import gmaps
 import matplotlib.pyplot as plt
 import itertools
-from rlx.utils import flatten, pbar, most_common_neighbour
+from rlx.utils import flatten, pbar, most_common_neighbour, humanbytes
 import utm
 import re
 from skimage.io import imsave, imread
 import descartes
+import hashlib
+from PIL import Image
+import hashlib
+from io import BytesIO
+from copy import copy, deepcopy
+import geopandas as gpd
+import pickle
+from shutil import make_archive, rmtree
+from time import time
+import gzip
 
 try:
     from shapely import geometry as sg
@@ -56,6 +66,17 @@ def latlon_to_wgs(lat, lon):
 
     return rlat, rlon
 
+def get_area_str(a):
+    """
+    a: area in m2
+    """
+    return "%.2f m2"%a if a<10 else  "%d m2"%a if a<=1e4 else "%.3f km2"%(a/1e6) if a<1e5 else "%.2f km2"%(a/1e6)
+
+def get_distance_str(d):
+    """
+    d: distance in m
+    """
+    return "%.1f"%d+"m" if d<1e3 else "%.2f"%(d/1e3)+"km"
 
 def degs_to_wgs(k):
     degs = int(k)
@@ -362,6 +383,864 @@ def get_shapely_multipolygon(rawcoords):
     shapelymultipolygon = sh.geometry.MultiPolygon(*preppedcoords)
     return shapelymultipolygon
 
+class TileSet(object):
+
+    def __init__(self, dir=None, metadata_geodf=None, dont_generate_tiles=False):
+        assert not (dir is None and metadata_geodf is None), "must specify dir or metadata_geodf"
+        assert not(dir is not None and metadata_geodf is not None), "can only set one: dir or metadata_geodf"
+
+        self.dir = dir
+        if self.dir is not None:
+            self.metadata = gpd.read_file(self.get_metadata_filename())
+        else:
+            self.metadata = metadata_geodf
+
+        if not dont_generate_tiles:
+            self.tiles = [Tile.from_geoseries(i, savedir=self.dir, use_file_cache=self.dir is not None) for _,i in self.metadata.iterrows()]
+            self.compute_properties()
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def get_metadata_filename(self, dir=None):
+        dir = self.dir if dir is None else dir
+        return dir+"/tileset.geojson" if dir is  not None else None
+
+    def compute_properties(self):
+
+        assert len(self.metadata)==0 or np.std(self.metadata.w)==0, "all tiles must have the same width"
+        assert len(self.metadata)==0 or np.std(self.metadata.h)==0, "all tiles must have the same height"
+        assert len(self.metadata)==0 or np.std(self.metadata.zoom)==0, "all tiles must have the same zoom level"
+
+        if len(self)>0:
+            areas = [i.get_area() for i in self.tiles]
+
+            sample_tile = self.tiles[0]
+
+            self.total_area = np.sum(areas)
+            self.tile_resolution = sample_tile.get_resolution
+            self.tile_w = sample_tile.w
+            self.tile_h = sample_tile.h
+            self.tile_zoom = sample_tile.zoom
+            self.tile_area_mean = np.mean(areas)
+            self.tile_area_std = np.std(areas)
+            self.center_lat = np.mean(self.metadata.center_lat)
+            self.center_lon = np.mean(self.metadata.center_lon)
+            w,s,e,n = self.metadata.total_bounds
+            self.bbox = {"SW": [w,s], "NE": [e,n], "SE": [e,s], "NW": [w,n]}
+
+        else:
+            self.total_area = 0
+            self.tile_resolution = lambda: (0,0)
+            self.tile_w = 0
+            self.tile_h = 0
+            self.tile_zoom = 0
+            self.tile_area_mean = 0
+            self.tile_area_std = 0
+            self.center_lat = 0
+            self.center_lon = 0
+            self.bbox = {"SW": [0,0], "NE": [0,0], "SE": [0,0], "NW": [0,0]}
+            
+    def get_size_meters(self):
+        mne = latlon_to_meters(*self.bbox["NE"])
+        msw = latlon_to_meters(*self.bbox["SW"])
+        my = mne[0]-msw[0]
+        mx = mne[1]-msw[1]
+        return mx, my
+
+    def __getitem__(self, slice):
+
+        if type(slice)==int:
+            r = self.metadata.iloc[slice:slice+1]
+            rtiles = self.tiles[slice:slice+1]
+        else:
+            r = self.metadata.iloc[slice]
+            rtiles = list(np.r_[self.tiles][slice])
+
+        r = self.__class__(metadata_geodf=r)
+        r.dir = self.dir
+        r.tiles = rtiles
+
+        return r
+
+    def __repr__(self):
+        rx, ry = self.tile_resolution()
+        mx, my = self.get_size_meters()
+
+        s =  "number of tiles:     %d"%len(self)
+        if self.dir is not None:
+            files = [i.get_local_filename() for i in self.tiles]
+            imgs_size    = humanbytes(np.sum([os.path.getsize(i) if os.path.exists(i) else 0 for i in files]))
+            imgs_nbfiles = np.sum([os.path.exists(i) for i in files])
+            total_files = len(os.listdir(self.dir))
+            metadata_size = humanbytes(os.path.getsize(self.get_metadata_filename()))        
+
+            s += "\nnb img files:        %d"%imgs_nbfiles
+            s += "\ntotal files in disk: %d"%total_files
+            s += "\nimgs size in disk:   "+imgs_size
+            s += "\nmetadata size:       "+metadata_size
+        else:
+            s += "\n\nno disk storage"
+
+        s += "\n"
+        s += "\ntileset center:  lat %s, lon %s"%(str(self.center_lat), str(self.center_lon))
+        s += "\naggregated area: "+get_area_str(np.sum(self.total_area))
+        s += "\n"
+        s += "\nbounding box size: "+get_distance_str(mx)+" x "+get_distance_str(my)
+        s += "\nbounding box area: "+get_area_str(mx*my)
+        s += "\nbounding box:\n"+"\n".join(["    "+k+": "+str(v) for k,v in self.bbox.iteritems()])
+        s += "\n"
+        s += "\ntile zoom:        %d"%self.tile_zoom
+        s += "\ntile size:        %dx%d px"%(self.tile_w,self.tile_h) #+ "   "+get_distance_str(mx)+" x "+get_distance_str(my)
+        s += "\ntike resolution:  %.2f m/pixel X %.2f m/pixel"%(rx, ry)
+        s += "\ntile area:        " + get_area_str(self.tile_area_mean)+" +/- "+get_area_str(self.tile_area_std)
+        return s
+
+
+    def save(self, dir=None, show_progress=True, overwrite_metadata=False, **kwargs):
+        if dir is None:
+            dir = self.dir            
+
+        assert dir is not None, "must set tileset dir"
+
+        if not os.path.exists(dir):
+            os.makedirs(dir)
+
+        assert overwrite_metadata or not os.path.exists(self.get_metadata_filename(dir)), "metadata file exists, use overwrite_metadata option"
+        self.metadata.crs='+init=epsg:4326'
+
+        if overwrite_metadata and os.path.exists(self.get_metadata_filename(dir)):
+            os.remove(self.get_metadata_filename(dir))
+
+        t = pbar(max_value=len(self))(self.tiles) if show_progress else self.tiles
+        for i in t:
+            if i.savedir is not None and i.savedir!=dir:
+                i.get_img() # forces img retrieval if tile is from a different source than dir
+            i.savedir = dir
+            i.use_file_cache = True
+            i.save(**kwargs)
+
+        self.dir = dir
+        self.metadata.to_file(driver="GeoJSON", filename=(self.get_metadata_filename()))
+
+    def get_ids(self):
+        return [i.get_id() for i in self.tiles]
+
+    def union(self, other_tileset):
+        """
+        collates tilesets removing duplicates
+        """
+        o = other_tileset
+        assert self.dir is not None and o.dir is not None, "tilesets must have storage ('dir' must be set)"
+
+        g = pd.concat((self.metadata, o.metadata))
+        t = self.tiles + o.tiles
+
+        # keep only tiles with no duplicates
+        ids = [i.get_id() for i in t]
+        idxs = [ids[i] not in ids[:i] for i in range(len(ids))]
+
+        g = g.iloc[idxs]
+        t = list(np.r_[t][idxs])
+
+        r = self.__class__(metadata_geodf=g, dont_generate_tiles=True)
+        r.tiles = t
+        r.compute_properties()
+        return r
+
+    def get_gmap_polygon(self):
+        b = self.bbox
+        return gmaps.Polygon([tuple(b["NE"])[::-1], tuple(b["NW"])[::-1], 
+                            tuple(b["SW"])[::-1], tuple(b["SE"])[::-1]])
+                            
+    def show_in_gmap(self, apikey, mode="show_bbox", zoom=None):
+        """
+        mode: "show_bbox" or "show_tiles"
+        """
+        assert mode=="show_bbox" or mode=="show_tiles", "mode has to be 'show_bbox' or 'show_tiles'"
+        gmaps.configure(api_key=apikey)
+        if mode=="show_bbox":
+            pols = [self.get_gmap_polygon()]
+        else:
+            pols = [i.get_gmap_polygon() for i in self.tiles]
+
+        zoom = self.tile_zoom-2 if zoom is None else zoom
+
+        fig = gmaps.figure(center=(self.center_lat, self.center_lon), zoom_level=zoom)
+        fig.add_layer(gmaps.drawing_layer(features=pols, show_controls=True))
+        return fig
+
+
+    @classmethod
+    def generate_rect_area(cls, init_tile, ntiles_width, ntiles_height, verbose=0):
+ 
+        gw = gh = init_tile
+        tiles = []
+        for _nw in range(ntiles_width):
+            for _nh in range(ntiles_height):
+                coords = pd.Series([_nw, _nh], index=["tilecoord_w", "tilecoord_h"])
+                tiles.append(pd.concat((coords, gh.to_geoseries())))
+                gh = gh.get_next_south()
+            gw = gh = gw.get_next_east()
+ 
+        return cls(metadata_geodf=gpd.GeoDataFrame(tiles))
+
+    @classmethod
+    def from_area_coverage(cls, tile_template, area):
+        """
+        tile_template: a tile of desired type and configuration (its coords don't matter, 
+                    they will be set according to the area coords)
+        area: must be a shapely polygon
+        """
+        w,s,e,n = area.bounds
+        g = tile_template
+        g.center_lat = n
+        g.center_lon = w
+        g.compute_properties()
+        tiles = []
+
+        gh = g
+        gv = g
+
+        if area.intersects(g.get_polygon()):
+            tiles.append(g)
+
+        print "building tiles"
+        while ( area.envelope.contains(sh.geometry.Point(gv.bbox["SE"])) or \
+                area.envelope.contains(sh.geometry.Point(gv.bbox["NW"])) ):
+            while ( area.envelope.contains(sh.geometry.Point(gh.bbox["SE"])) or \
+                    area.envelope.contains(sh.geometry.Point(gh.bbox["NW"])) ):
+                gh = gh.get_next_east()
+                if area.intersects(gh.get_polygon()):
+                    tiles.append(gh)
+            gv = gv.get_next_south()
+            if area.intersects(gv.get_polygon()):
+                tiles.append(gv)
+            gh = gv
+            
+        print "building tileset"
+        return cls.from_tilelist(tiles)
+
+    @classmethod
+    def from_tilelist(cls, tile_list):
+        metadata = gpd.GeoDataFrame([i.to_geoseries() for i in tile_list])
+        r = cls(metadata_geodf=metadata, dont_generate_tiles=True)
+        r.tiles = tile_list
+        r.compute_properties()
+        return r
+
+    def to_kmz(self, dest_file, color):
+        head = """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:kml="http://www.opengis.net/kml/2.2" xmlns:atom="http://www.w3.org/2005/Atom">
+<Folder>    
+        """
+        foot = """
+</Folder>
+</kml>
+        """
+        r = "\n".join([i.to_kmz_element() for i in self.tiles])
+        xml = head+r+foot
+        
+        tmpdir = '/tmp/'+hashlib.sha224(str(time())).hexdigest()
+        files_dir = tmpdir+"/files"
+        doc_file = tmpdir+"/doc.kml"
+        os.makedirs(files_dir)
+        
+        for tile in pbar()(self.tiles):
+            tile.export_to_transparency(rgb_color=color, dest_dir=files_dir)
+        
+        with open(doc_file, "w") as f:
+            f.write(xml)
+        
+        print tmpdir
+        
+        make_archive(dest_file, "zip", root_dir=tmpdir)
+        rmtree(tmpdir)
+        
+        os.rename(dest_file+".zip", dest_file+".kmz")
+
+        print "kmz written to", dest_file+".kmz"
+
+class Tile(object):
+    """
+    abstract class representing an arbitrary time at a certain zoom level
+    """
+    def __init__(self, center_lat, center_lon, zoom, pixel_size, format="jpg",
+                 savedir=None, verbose=0, use_file_cache=False):
+
+        assert not use_file_cache or (savedir is not None and use_file_cache), "must set savedir to use file cache"
+
+        self.zoom = zoom
+        self.savedir = savedir
+        self.format  = format
+
+        self.w, self.h = pixel_size
+
+        self.verbose = verbose
+
+        self.center_lat = np.float64(center_lat)
+        self.center_lon = np.float64(center_lon)
+
+        self.img     = None
+
+        self.use_file_cache=use_file_cache
+
+        self.compute_properties()
+
+    def compute_properties(self):
+        parallelMultiplier = np.cos(self.center_lat * np.pi / 180)
+        self.degreesPerPixelX = 360. / np.power(2, self.zoom + 8)
+        self.degreesPerPixelY = 360. / np.power(2, self.zoom + 8) * parallelMultiplier
+
+        self.bbox = {  'SW': self.get_pixel_latlon(0, self.h),
+                       'NE': self.get_pixel_latlon(self.w, 0),
+                       'SE': self.get_pixel_latlon(self.w, self.h),
+                       'NW': self.get_pixel_latlon(0, 0)
+                    }
+
+    def get_gmap_polygon(self):
+        b = self.bbox
+        return gmaps.Polygon([tuple(b["NE"])[::-1], tuple(b["NW"])[::-1], 
+                            tuple(b["SW"])[::-1], tuple(b["SE"])[::-1]])
+
+    def show_in_gmap(self, apikey):
+        gmaps.configure(api_key=apikey)
+        gmap_b = self.get_gmap_polygon()
+        fig = gmaps.figure(center=(self.center_lat, self.center_lon), zoom_level=self.zoom-1)
+        fig.add_layer(gmaps.drawing_layer(features=[gmap_b], show_controls=True))
+        return fig
+
+    def clone_with_properties(self, props):
+        """
+        props must be a dictionary with new properties to be set on the clone
+        """
+        r = copy(self)
+        for k,v in props.iteritems():
+            r.__setattr__(k,v)
+        r.compute_properties()
+        r.img = None
+        return r
+
+    def get_id(self):
+        raise NotImplementedError
+
+    def get_url(self):
+        raise NotImplementedError
+
+    def get_next_east(self):
+        raise NotImplementedError
+
+    def get_next_west(self):
+        raise NotImplementedError
+
+    def get_next_south(self):
+        raise NotImplementedError
+
+    def get_next_north(self):
+        raise NotImplementedError
+
+    def to_geoseries(self):
+        r = gpd.GeoSeries([self.__class__.__name__,
+                           self.get_id(), self.center_lat, self.center_lon, self.zoom, self.w, self.h,
+                           self.format, self.get_polygon()],
+                           index=["class_name", "id", "center_lat", "center_lon", "zoom", "w", "h", "format", "geometry"])
+        return r
+
+    @classmethod
+    def from_local_file(cls, fname):
+        raise NotImplementedError
+
+    @classmethod
+    def from_geoseries(cls, gs, savedir=None, use_file_cache=False, verbose=0, **kwargs):
+        """
+        returns an object from the class specified in the geoseries
+        """
+        class_object = eval(gs["class_name"])
+
+        # generated tiles have their own from_geoseries
+        if issubclass(class_object, GeneratedTile):
+            r = class_object.from_geoseries(gs, savedir, verbose)
+            return r
+
+        # otherwise append what __from_geoseries__ returns if the subclass has it
+        kwargs = class_object.__from_geoseries__(gs, **kwargs)
+        return class_object(center_lat=gs.center_lat, center_lon=gs.center_lon, zoom=gs.zoom,
+                   pixel_size=(gs.w, gs.h), format=gs.format,
+                   savedir=savedir, use_file_cache=use_file_cache, verbose=verbose, **kwargs)
+
+    @classmethod
+    def __from_geoseries__(cls, gs, **kwargs):
+        return kwargs
+
+    def get_local_filename(self):
+        assert self.savedir is not None, "must set storage directory"
+        this_id = self.get_id()
+        assert "___" not in this_id, "id cannot contain '___'"
+        return self.savedir+"/"+this_id+"."+self.format
+
+    def before_saving_pickle(self, data):
+        return data
+
+    def after_loading_pickle(self, data):
+        return data
+
+
+    def get_img(self, **kwargs):
+        # cache img in memory
+        if self.img is not None:
+            return self.img
+
+        # cache img in file
+        f = self.get_local_filename()
+        if self.use_file_cache and os.path.isfile(f):
+            if self.verbose>0:
+                print ("loading from file",f)
+            if self.format=="pklz":
+                with gzip.open(f,'rb') as gz:
+                    img = self.after_loading_pickle(pickle.load(gz))
+            else:
+                img = imread(f)
+            self.img = img
+            return img
+
+        url = self.get_url(**kwargs)
+        if self.verbose>0:
+            print ("retrieving", url)
+        file = BytesIO(urlopen(url).read())
+        self.img = np.array(Image.open(file).convert("RGB"))
+        if self.use_file_cache:
+            self.save()
+        return self.img
+
+    def save(self, savedir=None, overwrite=False, **kwargs):
+        if savedir is not None:
+            self.savedir=savedir
+            
+        assert self.savedir is not None, "must set savedir"
+        
+        fname = self.get_local_filename()
+        if not overwrite and os.path.isfile(fname):
+            if self.verbose>0:
+                print ("skipping existing", fname)
+            return
+        if self.verbose>0:
+            print ("saving to", fname)
+
+        img = self.get_img(**kwargs)
+        if self.format=="pklz":
+            with gzip.open(fname,'wb') as gz:
+                pickle.dump(self.before_saving_pickle(img), gz)
+        else:
+            imsave(fname, img)
+
+    def get_pixel_latlon(self, x, y):
+        w,h = self.w, self.h
+        pointLat = self.center_lat - self.degreesPerPixelY * ( y - h / 2)
+        pointLng = self.center_lon + self.degreesPerPixelX * ( x - w / 2)
+
+        return np.r_[(pointLng, pointLat)]
+
+    def get_polygon(self):
+        w,h = self.w, self.h
+        return sh.geometry.Polygon( [self.bbox["SW"], self.bbox["SE"],
+                                     self.bbox["NE"], self.bbox["NW"]]  )
+
+    def intersection(self, geo_dataframe, show_progress=False):
+        """
+        intersects this tile with the geometries of a GeoDataFrame
+        returns a subset of geo_dataframe with geometries trimmed
+        """
+        pol = self.get_polygon()
+        geometries = pbar()(geo_dataframe.geometry) if show_progress else geo_dataframe.geometry
+        di = geo_dataframe[[i.intersects(pol) for i in geometries]].copy()
+        di["geometry"] = [i.intersection(pol) for i in di.geometry]
+        return di
+
+    def get_area(self,  units="m2"):
+        allowed_units = ["m2", "km2"]
+        assert units in allowed_units, "units must be one of "+str(allowed_units)
+        mne = latlon_to_meters(*self.bbox["NE"])
+        msw = latlon_to_meters(*self.bbox["SW"])
+        r = (mne[0]-msw[0])*(mne[1]-msw[1])
+        if units=="km2":
+            r = r/1e6
+        return r
+
+    def get_size_meters(self):
+        mne = latlon_to_meters(*self.bbox["NE"])
+        msw = latlon_to_meters(*self.bbox["SW"])
+        my = mne[0]-msw[0]
+        mx = mne[1]-msw[1]
+        return mx,my
+
+
+    def get_resolution(self):
+        mx, my = self.get_size_meters()
+        return mx/self.w, my/self.h
+
+    def show(self, title=None, **kwargs):
+        plt.imshow(self.get_img(**kwargs))
+        plt.axis("off")
+        if title is not None:
+            plt.title(title)
+
+    def export_to_transparency(self, rgb_color, dest_dir):
+        cm = self.get_img().copy()
+        assert len(cm.shape)==2, "can only export tiles with single channel"
+        assert type(rgb_color)==tuple or type(rgb_color)==list, "color spec must be a 3-tuple rgb"
+        assert len(rgb_color)==3, "color spec must be a 3-tuple rgb"
+        
+        if np.max(cm)>1:
+            cm = cm*1./np.max(cm)
+            
+        d = np.r_[list(rgb_color)*cm.shape[0]*cm.shape[1]].reshape(cm.shape[0], cm.shape[1],-1)
+        d = np.insert(d, 3, (cm*255).astype(int), axis=2)
+        fname = dest_dir+"/"+self.get_id()+".png"
+        imsave(fname, d)            
+
+    def binarize(self, vmin, vmax=None):
+        """
+        sets to one img values in [vmin,vmax] (both inclusive) and to zero all others.
+        """
+        vmax = vmin if vmax is None else vmax
+        img = self.get_img()
+        r = np.zeros(img.shape)
+        r[ (img>=vmin) & (img<=vmax)] = 1
+        r = GeneratedTile.from_image(r, self)
+        r.format="png"
+        return r
+
+    def to_kmz_element(self, color="80ffffff"):
+        kmz_element="""
+                <GroundOverlay>
+                        <name>%s</name>
+                        <color>%s</color>
+                        <Icon>
+                                <href>%s</href>
+                                <viewBoundScale>0.75</viewBoundScale>
+                        </Icon>
+                        <LatLonBox>
+                                <north>%f</north>
+                                <south>%f</south>
+                                <east>%f</east>
+                                <west>%f</west>
+                        </LatLonBox>
+                </GroundOverlay>
+        """
+        e,n = self.bbox["NE"]
+        w,s = self.bbox["SW"]
+        name = "%f,%f"%(self.center_lon, self.center_lat)
+        fname = "files/"+self.get_id()+".png"
+        return kmz_element%(name, color, fname,n,s,e,w)    
+
+    def __repr__(self):
+
+        mx,my = self.get_size_meters()
+        rx,ry = self.get_resolution()
+
+        s =    "id:         "+self.get_id()
+        s += "\nclass:      "+self.__class__.__name__
+        s += "\ncenter:     lat %s, lon %s"%(str(self.center_lat), str(self.center_lon))
+        s += "\nzoom:       %d"%self.zoom
+        s += "\nsize:       %dx%d px"%(self.w,self.h)+ "   "+get_distance_str(mx)+" x "+get_distance_str(my)
+        s += "\nresolution: %.2f m/pixel X %.2f m/pixel"%(rx, ry)
+        s += "\narea:       " + get_area_str(self.get_area())
+        s += "\nbbox:\n"+"\n".join(["    "+k+": "+str(v) for k,v in self.bbox.iteritems()])
+        return s
+
+class SampleTile(Tile):
+    def __init__(self, img):
+
+        h, w = img.shape[0], img.shape[1]
+        super(SampleTile, self).__init__(center_lat=0, center_lon=0, 
+                                         zoom=1, pixel_size=(w,h), format="jpg",
+                                         savedir=None, verbose=0, use_file_cache=False)
+        self.img = img
+
+    def get_id(self):
+        return "0"
+
+
+class GeneratedTile(Tile):
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def from_image(cls, image, generated_fromtile, savedir=None):
+        r = cls()
+        r.properties = {k:v for k,v in  generated_fromtile.to_geoseries().iteritems()}
+        r.properties["generated_from"] = r.properties["class_name"]
+        r.properties["class_name"] = r.__class__.__name__
+        r.img = image
+        r.savedir = savedir
+        r.verbose = generated_fromtile.verbose
+        for k,v in r.properties.iteritems():
+            r.__setattr__(k,v)
+        r.id = generated_fromtile.get_id()
+        r.compute_properties()
+        return r
+
+    @classmethod
+    def from_geoseries(cls, gs, savedir, verbose=0):
+
+        assert gs["class_name"] == cls.__name__, "geoseries must have class_name='%s'"%cls.__name__
+
+        r = cls()
+        r.properties = {k:v for k,v in  gs.iteritems()}
+        for k,v in r.properties.iteritems():
+            r.__setattr__(k,v)
+        r.savedir = savedir
+        r.use_file_cache = True
+        r.verbose = verbose
+        r.compute_properties()
+        r.img = None
+        return r    
+
+    def get_id(self):
+        return self.id
+
+    def to_geoseries(self):
+        r = super(GeneratedTile, self).to_geoseries()
+        extra = gpd.GeoSeries([self.generated_from],index=["generated_from"])
+        return pd.concat((r,extra))
+
+    def get_url(self):
+        raise "Generated Tiles have no URL, make sure this tile is reconstructed with reference to the appropriate folder containing imgs"
+
+    def __repr__(self):
+        s = super(GeneratedTile, self).__repr__()
+        s += "\ngenerated_from:  %s"%self.generated_from
+        return s
+
+class SegmentationProbabilitiesTile(GeneratedTile):
+
+    @classmethod
+    def from_probabilities(cls, source_tile, prediction_probabilities):
+        """
+        source_tile: the tile for which the predictions are made
+        prediction_probabilities: a matrix of size w,h,n where w,h are the source_tile 
+                                  image dimensions and n is the number of classes
+        """
+
+        assert source_tile.h == prediction_probabilities.shape[0], "tile and probabilities must have the same w,h dimensions"
+        assert source_tile.w == prediction_probabilities.shape[1], "tile and probabilities must have the same w,h dimensions"
+        
+        r = copy(source_tile)
+        r.img = prediction_probabilities
+        r.format = "pklz"
+        r.num_classes = prediction_probabilities.shape[2]
+        r.compute_properties()
+
+        s = cls()#r.center_lat, r.center_lon, r.zoom, (r.w, r.h))
+        instance_attrs = [[i, type(eval("r."+i))] for i in dir(r) if not i.startswith("__") and str(type(eval("r."+i)))!="<type 'instancemethod'>"]
+        for k,v in instance_attrs:
+            s.__setattr__(k, r.__getattribute__(k))
+        s.compute_properties()
+        s.img = prediction_probabilities
+        return s
+
+    def before_saving_pickle(self, data):
+        return (data*(2**8)).astype("uint8")
+
+    def after_loading_pickle(self, data):
+        return data.astype("float")/(2**8)
+
+    def get_img(self):
+        img = super(SegmentationProbabilitiesTile, self).get_img()
+        return img
+
+    def get_maxclass_prediction(self):
+        r = GeneratedTile.from_image(self.get_img().argmax(axis=2), self)
+        r.format="png"
+        return r
+
+    def get_classmap(self, class_number, binary=False, threshold=None):
+        # must retrieve the image to know the number of classes
+        img = self.get_img()[:,:,class_number].copy()
+
+        assert not(binary and threshold is None), "when using binary must specify threshold"
+        assert class_number <= self.get_num_classes(), "this tile has only %d classes"%self.get_num_classes()
+
+        
+        if threshold is not None:
+            img[img<threshold] = 0
+            
+        if binary:
+            img[img!=0] = 1
+            
+        r = GeneratedTile.from_image(img, self)
+        r.format = "png"
+        return r
+
+    def get_false_positive_map(self, label_tile, class_number, threshold):
+        lab = label_tile.get_img()
+
+        assert len(lab.shape)==2, "label must be single channel"
+
+
+        lab = lab==class_number
+        d   = self.get_classmap(class_number, binary=True, threshold=threshold).get_img().copy()
+        d[lab==1]=0
+        r = GeneratedTile.from_image(d, self)
+        r.format="png"
+        return r
+
+    def plot_class_probabilities(self):
+        img = self.get_img()
+        ncols = 4
+        nrows = int(np.ceil(self.get_num_classes()*1./ncols))
+        plt.figure(figsize=(ncols*4, nrows*4))
+        img = self.get_img()
+        for i in range(self.get_num_classes()):
+            plt.subplot(nrows, ncols, i+1)
+            plt.imshow(self.get_classmap(i).get_img())
+            plt.axis("off")
+            plt.title("CLASS %d"%i)
+
+    def maxprob_prediction_metrics(self, label_tile):
+        l = label_tile.get_img()
+        assert len(l.shape)==2, "label must be a single channel image (2 dims matrix)"
+        
+        p = self.get_maxclass_prediction().get_img()
+        
+        r = []
+        for i in range(self.get_num_classes()):
+            cl = np.zeros(l.shape)
+            cl[l==i]=1
+            
+            cp = np.zeros(p.shape)
+            cp[p==i]=1
+        
+            r.append({"class": i, 
+                    "px_accuracy": np.sum((cp==1)&(cl==1))*1./np.sum(cl==1), 
+                    "n_pixels":int(np.sum(cl)),  
+                    "pct_area": np.sum(cl)*1./np.product(cl.shape),
+                    "iou": np.sum((cp==1)&(cl==1))*1./np.sum((cp==1)|(cl==1))})
+        
+        return pd.DataFrame(r)
+
+    def get_num_classes(self):
+        if not hasattr(self, "num_classes"):
+            self.num_classes = self.get_img().shape[2]
+        return self.num_classes
+
+    def threshold_prediction_metrics(self, label_tile, threshold):
+        l = label_tile.get_img()
+        assert len(l.shape)==2, "label must be a single channel image (2 dims matrix)"
+
+        r = []
+        for i in range(self.get_num_classes()):
+            cl = np.zeros(l.shape)
+            cl[l==i]=1
+
+            cp = self.get_classmap(class_number=i, binary=True, threshold=threshold).get_img()
+
+            r.append({"class": i, 
+                    "px_accuracy": np.sum((cp==1)&(cl==1))*1./np.sum(cl==1), 
+                    "n_pixels":int(np.sum(cl)),  
+                    "pct_area": np.sum(cl)*1./np.product(cl.shape),
+                    "iou": np.sum((cp==1)&(cl==1))*1./np.sum((cp==1)|(cl==1))})
+
+        return pd.DataFrame(r)
+        
+class GMaps_StaticAPI_Tile(Tile):
+
+    def __init__(self, maptype="roadmap", use_descriptive_id=False, apikey=None,**kwargs):
+
+        super(GMaps_StaticAPI_Tile, self).__init__(**kwargs)
+
+        self.maptype = maptype
+        self.apikey  = apikey
+        self.google_logo_height = 20 # to remove google logo
+        self.use_descriptive_id = use_descriptive_id
+        self.extra_id = ""
+
+    def get_url(self, apikey=None):
+        self.apikey = apikey if apikey is not None else self.apikey
+        assert self.apikey is not None, "must set apikey"
+        w,h = self.w, self.h
+        s = "https://maps.googleapis.com/maps/api/staticmap?center=%s,%s&zoom=%s&size=%sx%s&maptype=%s&key=%s"% \
+            (str(self.center_lat),str(self.center_lon),str(self.zoom), str(w),
+             str(h+self.google_logo_height), self.maptype, self.apikey)
+        return s
+
+    def to_geoseries(self):
+        r = super(GMaps_StaticAPI_Tile, self).to_geoseries()
+        extra = gpd.GeoSeries([self.maptype, int(self.use_descriptive_id)],index=["maptype", "use_descriptive_id"])
+        return pd.concat((r,extra))
+
+    @classmethod
+    def __from_geoseries__(cls, gs, apikey=None):
+        """
+        this method is to be called from the parent from_geoseries.
+        returns a dictionary extracted from gs (a Pandas GeoSeries)
+        to be appended to the constructor call.
+        """
+        return {"maptype": gs["maptype"], "use_descriptive_id": gs["use_descriptive_id"], "apikey": apikey}
+
+
+    def get_id(self):
+        r = "gmaps_%s_%s_zoom_%s_%sx%s_%s%s"%\
+                        (str(self.center_lat),str(self.center_lon),str(self.zoom), str(self.w), str(self.h), self.maptype, self.extra_id)
+
+        if self.use_descriptive_id:
+            return r
+        return hashlib.sha224(r).hexdigest()
+
+    def get_img(self, **kwargs):
+        """
+            removes google logo
+        """
+        img = super(GMaps_StaticAPI_Tile, self).get_img(**kwargs)
+        self.img = img[:self.h, :self.w]
+        return self.img
+
+    def get_next_east(self):
+        lon,lat = self.get_pixel_latlon(self.w*3/2, self.h/2)
+        return self.clone_with_properties({"center_lat": lat, "center_lon":lon})
+
+    def get_next_west(self):
+        lon,lat = self.get_pixel_latlon(-self.w/2, self.h/2)
+        return self.clone_with_properties({"center_lat": lat, "center_lon":lon})
+
+    def get_next_south(self):
+        lon,lat = self.get_pixel_latlon(self.w/2, self.h*3/2)
+        return self.clone_with_properties({"center_lat": lat, "center_lon":lon})
+
+    def get_next_north(self):
+        lon,lat = self.get_pixel_latlon(self.w/2, -self.h/2)
+        return self.clone_with_properties({"center_lat": lat, "center_lon":lon})
+
+    def __repr__(self):
+        s = super(GMaps_StaticAPI_Tile, self).__repr__()
+        s += "\nmaptype:            %s"%self.maptype
+        s += "\nuse_descriptive_id: %s"%self.use_descriptive_id
+        return s
+
+    @classmethod
+    def from_local_file(cls, fname, use_descriptive_id=True, preload_img=True, format="jpg"):
+        """
+        only when using descriptive ids so that metadata is encoded in the file name
+        """
+
+        p = re.compile('(\S*)gmaps_(\S+)_(\S+)_zoom_(\d+)_(\d+)x(\d+)_([^_]+)(_\S*).'+format).match(fname)
+        if p is None:
+            return None
+        dir, lat, lon, zoom, px, py, mtype, extra_id = p.groups()
+        g = cls(center_lat = np.float64(lat), center_lon = np.float64(lon), 
+                zoom = int(zoom), pixel_size = (int(px), int(py)),
+                maptype=mtype, format = "jpg", savedir=dir, use_file_cache=True)
+        g.use_descriptive_id = use_descriptive_id
+        g.extra_id = extra_id
+        g.format = format
+        if preload_img:
+            g.get_img()
+        if len(dir)!=0:
+            g.savedir=dir
+            g.use_file_cache=True
+        return g
+
 
 class GoogleMaps_Static_Image:
     @classmethod
@@ -530,7 +1409,8 @@ class GoogleMaps_Static_Image:
 
     def get_area_str(self):
         a = self.get_area()
-        return "%d m2"%a if a<=1e4 else "%.3f km2"%(a/1e6) if a<1e5 else "%.2f km2"%(a/1e6)
+        print a
+        return "%.2f m2"%a if a<10 else "%d m2"%a if a<=1e4 else "%.3f km2"%(a/1e6) if a<1e5 else "%.2f km2"%(a/1e6)
 
     def __repr__(self):
         b = self.get_bbox()
