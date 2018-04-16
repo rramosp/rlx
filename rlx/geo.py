@@ -1267,7 +1267,7 @@ def katana_polygon_split(geometry, threshold, count=0):
             c = [c]
         for e in c:
             if isinstance(e, (Polygon, MultiPolygon)):
-                result.extend(katana(e, threshold, count+1))
+                result.extend(katana_polygon_split(e, threshold, count+1))
     if count > 0:
         return result
     # convert multipart into singlepart
