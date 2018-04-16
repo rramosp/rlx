@@ -1241,8 +1241,44 @@ class GMaps_StaticAPI_Tile(Tile):
             g.use_file_cache=True
         return g
 
+from shapely.geometry import box, Polygon, MultiPolygon, GeometryCollection
 
-class GoogleMaps_Static_Image:
+def katana_polygon_split(geometry, threshold, count=0):
+    """Split a Polygon into two parts across it's shortest dimension"""
+    bounds = geometry.bounds
+    width = bounds[2] - bounds[0]
+    height = bounds[3] - bounds[1]
+    if max(width, height) <= threshold or count == 250:
+        # either the polygon is smaller than the threshold, or the maximum
+        # number of recursions has been reached
+        return [geometry]
+    if height >= width:
+        # split left to right
+        a = box(bounds[0], bounds[1], bounds[2], bounds[1]+height/2)
+        b = box(bounds[0], bounds[1]+height/2, bounds[2], bounds[3])
+    else:
+        # split top to bottom
+        a = box(bounds[0], bounds[1], bounds[0]+width/2, bounds[3])
+        b = box(bounds[0]+width/2, bounds[1], bounds[2], bounds[3])
+    result = []
+    for d in (a, b,):
+        c = geometry.intersection(d)
+        if not isinstance(c, GeometryCollection):
+            c = [c]
+        for e in c:
+            if isinstance(e, (Polygon, MultiPolygon)):
+                result.extend(katana(e, threshold, count+1))
+    if count > 0:
+        return result
+    # convert multipart into singlepart
+    final_result = []
+    for g in result:
+        if isinstance(g, MultiPolygon):
+            final_result.extend(g)
+        else:
+            final_result.append(g)
+    return final_result
+class XGoogleMaps_Static_Image:
     @classmethod
     def from_filename(cls, fname):
         p = re.compile('(\S*)gmaps_(\S+)_(\S+)_zoom_(\d+)_(\d+)x(\d+)_([^_]+)_([^_]+).jpg').match(fname)
@@ -1423,7 +1459,7 @@ class GoogleMaps_Static_Image:
         return s
 
 
-class GoogleMaps_Static_Mosaic:
+class XGoogleMaps_Static_Mosaic:
 
     def __init__(self, init_gImage, nw, nh):
         """
@@ -1521,7 +1557,7 @@ class GoogleMaps_Static_Mosaic:
         return s
 
 
-class GoogleMaps_Shapefile_Layer:
+class XGoogleMaps_Shapefile_Layer:
 
     def __init__(self, layer_name, shapefile_name, utm_zone_number, utm_zone_letter):
         self.fname = shapefile_name
