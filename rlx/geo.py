@@ -1278,6 +1278,21 @@ def katana_polygon_split(geometry, threshold, count=0):
         else:
             final_result.append(g)
     return final_result
+
+
+def read_googlemaps_kml(kml_file):
+    with open(kml_file, 'rt') as f:
+        area = kml.KML()
+        area.from_string(f.read())
+    pm = list(list(list(area.features())[0].features())[0].features())[0]
+    el = pm.etree_element()
+    pol = el[3]
+    coords = list(pol.getiterator())[3]
+    coords = np.r_[[np.r_[i.split(",")[:2]].astype(float) for i in coords.text.split(" ")]]
+
+    area = sh.geometry.Polygon(coords)    
+    return area
+    
 class XGoogleMaps_Static_Image:
     @classmethod
     def from_filename(cls, fname):
