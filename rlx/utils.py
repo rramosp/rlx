@@ -8,8 +8,11 @@ import sys
 from pygments import highlight
 from pygments.lexers import get_lexer_by_name
 from pygments.formatters import HtmlFormatter
-import matplotlib as mpl
-import matplotlib.pyplot as plt
+try:
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+except ImportError as e:
+    print "warning: matplotlib not loaded", e
 from IPython.core import display
 import contextlib
 import math
