@@ -16,7 +16,10 @@ else:
     from urllib import urlopen
 from io import BytesIO
 import gmaps
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError as e:
+    print "warning: matplotlib not loaded", e
 import itertools
 from rlx.utils import flatten, pbar, most_common_neighbour, humanbytes
 import utm
