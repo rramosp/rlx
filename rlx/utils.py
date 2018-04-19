@@ -10,7 +10,7 @@ def running_in_notebook():
     except NameError:
         return False
 
-        
+
 import itertools
 import pandas as pd
 import numpy as np
@@ -20,11 +20,16 @@ import sys
 from pygments import highlight
 from pygments.lexers import get_lexer_by_name
 from pygments.formatters import HtmlFormatter
-try:
+
+if running_in_notebook():
     import matplotlib as mpl
     import matplotlib.pyplot as plt
-except ImportError as e:
-    print "warning: matplotlib not loaded", e
+else:
+    import matplotlib as mpl
+    mpl.use('Agg')
+    import matplotlib.pyplot as plt
+    print "warning: matplotlib loaded without DISPLAY"
+
 from IPython.core import display
 import contextlib
 import math
