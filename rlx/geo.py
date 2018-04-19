@@ -654,9 +654,7 @@ class TileSet(object):
         
         with open(doc_file, "w") as f:
             f.write(xml)
-        
-        print tmpdir
-        
+                
         make_archive(dest_file, "zip", root_dir=tmpdir)
         rmtree(tmpdir)
         

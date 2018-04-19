@@ -1,9 +1,17 @@
 import numpy as np
 import pandas as pd
 from rlx import utils
-import matplotlib as mpl
-#mpl.use('Agg')
-import matplotlib.pyplot as plt
+
+try:
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+except ImportError as e:
+    mpl.use('Agg')
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+    print "warning: matplotlib loaded without DISPLAY"
+
+
 from joblib import delayed
 from sklearn.neighbors import KernelDensity
 from skimage.io import imread
