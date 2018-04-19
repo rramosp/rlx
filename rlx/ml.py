@@ -1,17 +1,27 @@
-import numpy as np
-import pandas as pd
-from rlx import utils
 
-try:
+def running_in_notebook():
+    try:
+        cfg = get_ipython().config
+        if cfg['IPKernelApp']['parent_appname'] == 'ipython-notebook':
+            return True
+        else:
+            return False
+    except NameError:
+        return False
+        
+
+if running_in_notebook():
     import matplotlib as mpl
     import matplotlib.pyplot as plt
-except ImportError as e:
-    mpl.use('Agg')
+else:
     import matplotlib as mpl
+    mpl.use('Agg')
     import matplotlib.pyplot as plt
     print "warning: matplotlib loaded without DISPLAY"
 
-
+import numpy as np
+import pandas as pd
+from rlx import utils
 from joblib import delayed
 from sklearn.neighbors import KernelDensity
 from skimage.io import imread

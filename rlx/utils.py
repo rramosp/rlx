@@ -1,4 +1,16 @@
 
+
+def running_in_notebook():
+    try:
+        cfg = get_ipython().config
+        if cfg['IPKernelApp']['parent_appname'] == 'ipython-notebook':
+            return True
+        else:
+            return False
+    except NameError:
+        return False
+
+        
 import itertools
 import pandas as pd
 import numpy as np
@@ -49,16 +61,6 @@ STANDARD_COLORS = np.r_[[
     'WhiteSmoke', 'Yellow', 'YellowGreen'
 ]]
 
-
-def running_in_notebook():
-    try:
-        cfg = get_ipython().config
-        if cfg['IPKernelApp']['parent_appname'] == 'ipython-notebook':
-            return True
-        else:
-            return False
-    except NameError:
-        return False
 
 
 def read_password_protected_zip(fname):
