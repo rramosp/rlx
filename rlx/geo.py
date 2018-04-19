@@ -1,3 +1,14 @@
+def running_in_notebook():
+    try:
+        cfg = get_ipython().config
+        if cfg['IPKernelApp']['parent_appname'] == 'ipython-notebook':
+            return True
+        else:
+            return False
+    except NameError:
+        return False
+        
+        
 import numpy as np
 from bokeh import layouts as bl
 from bokeh import models as bm
@@ -16,10 +27,16 @@ else:
     from urllib import urlopen
 from io import BytesIO
 import gmaps
-try:
+
+if running_in_notebook():
+    import matplotlib as mpl
     import matplotlib.pyplot as plt
-except ImportError as e:
-    print "warning: matplotlib not loaded", e
+else:
+    import matplotlib as mpl
+    mpl.use('Agg')
+    import matplotlib.pyplot as plt
+    print "rlx.ml warning: matplotlib loaded without DISPLAY"
+    
 import itertools
 from rlx.utils import flatten, pbar, most_common_neighbour, humanbytes
 import utm

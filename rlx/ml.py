@@ -17,7 +17,7 @@ else:
     import matplotlib as mpl
     mpl.use('Agg')
     import matplotlib.pyplot as plt
-    print "warning: matplotlib loaded without DISPLAY"
+    print "rlx.ml warning: matplotlib loaded without DISPLAY"
 
 import numpy as np
 import pandas as pd
