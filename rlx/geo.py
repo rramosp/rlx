@@ -8,7 +8,6 @@ def running_in_notebook():
     except NameError:
         return False
         
-        
 import numpy as np
 from bokeh import layouts as bl
 from bokeh import models as bm
@@ -20,6 +19,7 @@ import shapefile
 from shapely import affinity
 import shapely as sh
 from PIL import Image
+from sklearn.cluster import KMeans
 import sys
 if sys.version[0]=='3':
     from urllib.request import urlopen
@@ -35,7 +35,6 @@ else:
     import matplotlib as mpl
     mpl.use('Agg')
     import matplotlib.pyplot as plt
-    print "rlx.ml warning: matplotlib loaded without DISPLAY"
     
 import itertools
 from rlx.utils import flatten, pbar, most_common_neighbour, humanbytes
@@ -53,12 +52,17 @@ import pickle
 from shutil import make_archive, rmtree
 from time import time
 import gzip
+from shapely.geometry import box, Polygon, MultiPolygon, GeometryCollection
+from rlx import globalmaptiles
 
 try:
     from shapely import geometry as sg
 except OSError as err:
     print ("WARN! could not load shapely library")
     print (err)
+
+CRS_WGS84 = '+init=epsg:4326'
+CRS_ZONE_30_METERS =  "+proj=utm +zone=30 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
 
 def latlon_to_meters(lats, lons):
     origin_shift = 2 * np.pi * 6378137 / 2.0
@@ -126,8 +130,20 @@ def base_map(tools=None, axis_visible=True, **kwargs):
     p.add_tile(CARTODBPOSITRON)
     return p
 
+def read_shapefile(shapefile, source_crs=None, convert_crs_to=None):
+    assert not (convert_crs_to is not None and source_crs is None), "must set source_crs if using crs convertion"
+    print "loading shapefile at", shapefile
+    c = gpd.read_file(shapefile)
 
-def read_shapefile(shp_path, utm_zone_number=None, utm_zone_letter=None):
+    if source_crs is not None:
+        c.crs = source_crs
+        
+    if convert_crs_to is not None:
+        print "converting coordinates"
+        c = c.to_crs(convert_crs_to)
+    return c
+
+def Xread_shapefile(shp_path, utm_zone_number=None, utm_zone_letter=None):
     """
     Read a shapefile into a Pandas dataframe with a 'coords' column holding
     the geometry information. This uses the pyshp package.
@@ -483,6 +499,11 @@ class TileSet(object):
 
         return r
 
+    def get_nb_files_in_disk(self):
+        files = [i.get_local_filename() for i in self.tiles]
+        imgs_nbfiles = np.sum([os.path.exists(i) for i in files])
+        return imgs_nbfiles
+
     def __repr__(self):
         rx, ry = self.tile_resolution()
         mx, my = self.get_size_meters()
@@ -516,6 +537,20 @@ class TileSet(object):
         s += "\ntile area:        " + get_area_str(self.tile_area_mean)+" +/- "+get_area_str(self.tile_area_std)
         return s
 
+
+    def set_dir(self, dir):
+        self.dir = dir
+        for tile in self.tiles:
+            tile.savedir = dir
+            tile.use_file_cache = True
+
+    def count_missing_tiles(self):
+        return len(self) - self.get_nb_files_in_disk()
+
+    def metadata_exists(self):
+        if self.dir is None:
+            return False
+        return os.path.exists(self.get_metadata_filename(self.dir))
 
     def save(self, dir=None, show_progress=True, overwrite_metadata=False, **kwargs):
         if dir is None:
@@ -568,28 +603,47 @@ class TileSet(object):
         r.compute_properties()
         return r
 
-    def get_gmap_polygon(self):
+    def get_gmap_polygon(self, **kwargs):
         b = self.bbox
         return gmaps.Polygon([tuple(b["NE"])[::-1], tuple(b["NW"])[::-1], 
-                            tuple(b["SW"])[::-1], tuple(b["SE"])[::-1]])
+                            tuple(b["SW"])[::-1], tuple(b["SE"])[::-1]], **kwargs)
                             
-    def show_in_gmap(self, apikey, mode="show_bbox", zoom=None):
+    def show_in_gmap(self, apikey, mode="show_bbox", zoom=None, layers=None, **kwargs):
         """
         mode: "show_bbox" or "show_tiles"
         """
         assert mode=="show_bbox" or mode=="show_tiles", "mode has to be 'show_bbox' or 'show_tiles'"
         gmaps.configure(api_key=apikey)
         if mode=="show_bbox":
-            pols = [self.get_gmap_polygon()]
+            pols = [self.get_gmap_polygon(**kwargs)]
         else:
-            pols = [i.get_gmap_polygon() for i in self.tiles]
+            pols = [i.get_gmap_polygon(**kwargs) for i in self.tiles]
 
         zoom = self.tile_zoom-2 if zoom is None else zoom
 
         fig = gmaps.figure(center=(self.center_lat, self.center_lon), zoom_level=zoom)
-        fig.add_layer(gmaps.drawing_layer(features=pols, show_controls=True))
+        fig.add_layer(gmaps.drawing_layer(features=pols, show_controls=False))
+        if layers is not None:
+            for layer in layers:
+                fig.add_layer(layer)
         return fig
 
+    def get_boundary(self):
+        k = self.tiles[0].get_polygon()
+        for tile in self.tiles[1:]:
+            k = k.union(tile.get_polygon())
+        return k
+
+    def intersect_with(self, geodf):
+        """
+        intersects this tileset with a geodf
+        """
+        area = self.get_boundary()
+        
+        print "intersecting polygons"
+        k = geodf[[i.intersects(area) for i in pbar()(geodf.geometry)]].copy()
+        k["geometry"] = [i.intersection(area) for i in k.geometry]
+        return k
 
     @classmethod
     def generate_rect_area(cls, init_tile, ntiles_width, ntiles_height, verbose=0):
@@ -626,10 +680,9 @@ class TileSet(object):
             tiles.append(g)
 
         print "building tiles"
-        while ( area.envelope.contains(sh.geometry.Point(gv.bbox["SE"])) or \
-                area.envelope.contains(sh.geometry.Point(gv.bbox["NW"])) ):
-            while ( area.envelope.contains(sh.geometry.Point(gh.bbox["SE"])) or \
-                    area.envelope.contains(sh.geometry.Point(gh.bbox["NW"])) ):
+
+        while np.any([area.envelope.contains(sh.geometry.Point(i)) for i in gv.bbox.values()]):
+            while np.any([area.envelope.contains(sh.geometry.Point(i)) for i in gh.bbox.values()]):
                 gh = gh.get_next_east()
                 if area.intersects(gh.get_polygon()):
                     tiles.append(gh)
@@ -649,7 +702,11 @@ class TileSet(object):
         r.compute_properties()
         return r
 
-    def to_kmz(self, dest_file, color):
+    def to_kmz(self, dest_file, transparency=0.7, **kwargs):
+        """
+        transparency: float between 0 and 1
+        """
+        assert 0<= transparency and 1>=transparency, "transparency must be float in [0,1]"
         head = """<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:kml="http://www.opengis.net/kml/2.2" xmlns:atom="http://www.w3.org/2005/Atom">
 <Folder>    
@@ -658,7 +715,12 @@ class TileSet(object):
 </Folder>
 </kml>
         """
-        r = "\n".join([i.to_kmz_element() for i in self.tiles])
+
+        transparency = int(255*transparency)
+        color = '{:02x}ffffff'.format(transparency)
+
+
+        r = "\n".join([i.to_kmz_element(color=color) for i in self.tiles])
         xml = head+r+foot
         
         tmpdir = '/tmp/'+hashlib.sha224(str(time())).hexdigest()
@@ -667,7 +729,7 @@ class TileSet(object):
         os.makedirs(files_dir)
         
         for tile in pbar()(self.tiles):
-            tile.export_to_transparency(rgb_color=color, dest_dir=files_dir)
+            tile.export_for_kmz(dest_dir=files_dir, **kwargs)
         
         with open(doc_file, "w") as f:
             f.write(xml)
@@ -716,16 +778,16 @@ class Tile(object):
                        'NW': self.get_pixel_latlon(0, 0)
                     }
 
-    def get_gmap_polygon(self):
+    def get_gmap_polygon(self, **kwargs):
         b = self.bbox
         return gmaps.Polygon([tuple(b["NE"])[::-1], tuple(b["NW"])[::-1], 
-                            tuple(b["SW"])[::-1], tuple(b["SE"])[::-1]])
+                            tuple(b["SW"])[::-1], tuple(b["SE"])[::-1]], **kwargs)
 
-    def show_in_gmap(self, apikey):
+    def show_in_gmap(self, apikey, **kwargs):
         gmaps.configure(api_key=apikey)
-        gmap_b = self.get_gmap_polygon()
+        gmap_b = self.get_gmap_polygon(**kwargs)
         fig = gmaps.figure(center=(self.center_lat, self.center_lon), zoom_level=self.zoom-1)
-        fig.add_layer(gmaps.drawing_layer(features=[gmap_b], show_controls=True))
+        fig.add_layer(gmaps.drawing_layer(features=[gmap_b]))
         return fig
 
     def clone_with_properties(self, props):
@@ -790,11 +852,14 @@ class Tile(object):
     def __from_geoseries__(cls, gs, **kwargs):
         return kwargs
 
-    def get_local_filename(self):
-        assert self.savedir is not None, "must set storage directory"
+    def get_local_filename(self, include_path=True):
+        assert not include_path or (include_path and self.savedir is not None), "must set storage directory"
         this_id = self.get_id()
         assert "___" not in this_id, "id cannot contain '___'"
-        return self.savedir+"/"+this_id+"."+self.format
+        r = this_id+"."+self.format
+        if include_path:
+            r = self.savedir + "/" + r
+        return r
 
     def before_saving_pickle(self, data):
         return data
@@ -851,6 +916,11 @@ class Tile(object):
         else:
             imsave(fname, img)
 
+    def export_for_kmz(self, dest_dir):
+        savedir = self.savedir
+        self.save(savedir=dest_dir)
+        self.savedir = savedir
+
     def get_pixel_latlon(self, x, y):
         w,h = self.w, self.h
         pointLat = self.center_lat - self.degreesPerPixelY * ( y - h / 2)
@@ -900,21 +970,7 @@ class Tile(object):
         plt.imshow(self.get_img(**kwargs))
         plt.axis("off")
         if title is not None:
-            plt.title(title)
-
-    def export_to_transparency(self, rgb_color, dest_dir):
-        cm = self.get_img().copy()
-        assert len(cm.shape)==2, "can only export tiles with single channel"
-        assert type(rgb_color)==tuple or type(rgb_color)==list, "color spec must be a 3-tuple rgb"
-        assert len(rgb_color)==3, "color spec must be a 3-tuple rgb"
-        
-        if np.max(cm)>1:
-            cm = cm*1./np.max(cm)
-            
-        d = np.r_[list(rgb_color)*cm.shape[0]*cm.shape[1]].reshape(cm.shape[0], cm.shape[1],-1)
-        d = np.insert(d, 3, (cm*255).astype(int), axis=2)
-        fname = dest_dir+"/"+self.get_id()+".png"
-        imsave(fname, d)            
+            plt.title(title)          
 
     def binarize(self, vmin, vmax=None):
         """
@@ -924,7 +980,7 @@ class Tile(object):
         img = self.get_img()
         r = np.zeros(img.shape)
         r[ (img>=vmin) & (img<=vmax)] = 1
-        r = GeneratedTile.from_image(r, self)
+        r = BinaryTile.from_image(r, self)
         r.format="png"
         return r
 
@@ -948,7 +1004,7 @@ class Tile(object):
         e,n = self.bbox["NE"]
         w,s = self.bbox["SW"]
         name = "%f,%f"%(self.center_lon, self.center_lat)
-        fname = "files/"+self.get_id()+".png"
+        fname = "files/"+self.get_local_filename(include_path=False).split("/")[-1]
         return kmz_element%(name, color, fname,n,s,e,w)    
 
     def __repr__(self):
@@ -966,6 +1022,131 @@ class Tile(object):
         s += "\nbbox:\n"+"\n".join(["    "+k+": "+str(v) for k,v in self.bbox.iteritems()])
         return s
 
+class XYZTile(Tile):
+    
+    def __init__ (self, zoom, lat=None, lon=None, X=None, Y=None, 
+                  sign_lat=None, sign_lon=None, pixel_size=(256,256), 
+                  tile_src="ESRI_SAT",
+                  **kwargs):
+        
+        """
+        use sign_lat or sign_lon if you want to force their sign as sometimes
+        globalmaptiles return wrong sign. it must be -1 or 1
+        
+        use lat/lon or X/Y but now both
+        """
+        
+        assert (lat is None and lon is None and X is not None and Y is not None) or \
+               (lat is not None and lon is not None and X is None and Y is None), "must set lat/lon or X/Y"
+        
+        assert sign_lat is None or sign_lat in [-1,1], "sign_lat must be -1 or 1"
+        assert sign_lon is None or sign_lon in [-1,1], "sign_lon must be -1 or 1"
+
+        assert tile_src in ["ESRI_SAT", "GOOGLE_SAT"], "only 'ESRI_SAT' and 'GOOGLE_SAT' tiles allowed"
+        
+        self.mercator = globalmaptiles.GlobalMercator()
+        if lat is not None:
+            self.X, self.Y = self.mercator.GoogleTileFromLatLng(lat, lon, zoom)
+            self.sign_lat = np.sign(lat)
+            self.sign_lon = np.sign(lon)
+        else:
+            self.X = X
+            self.Y = Y
+            self.sign_lat = sign_lat
+            self.sign_lon = sign_lon        
+        self.zoom = zoom
+
+        if tile_src == "ESRI_SAT":
+            self.URL_template = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{Z}/{Y}/{X}"
+        if tile_src == "GOOGLE_SAT":
+            self.URL_template = "https://khms3.google.com/kh/v=800?x={X}&y={Y}&z={Z}"
+        
+        self.tile_src = tile_src
+        
+        center_lat, center_lon = self.compute_XYZcenter()
+
+        # remove center_lat, center_lon from kwargs and use the ones just computed
+        kwargs = {k:v for k,v in kwargs.iteritems() if k!="center_lat" and k!="center_lon"}
+        super(XYZTile, self).__init__(center_lat, center_lon, zoom, pixel_size, **kwargs)
+
+    def get_id(self):
+        return "%s_%d_%d_%d"%(self.tile_src, self.X, self.Y, self.zoom)
+
+    def compute_XYZcenter(self):
+        self.mercator = globalmaptiles.GlobalMercator()
+        
+        self.S, self.E, self.N, self.W = self.mercator.TileLatLonBounds( self.X, self.Y, self.zoom)
+                
+        if self.sign_lat is not None:
+            self.N = self.sign_lat*np.abs(self.N)
+            self.S = self.sign_lat*np.abs(self.S)
+        
+        if self.sign_lon is not None:
+            self.W = self.sign_lon*np.abs(self.W)
+            self.E = self.sign_lon*np.abs(self.E)
+            
+        center_lon = (self.E+self.W)/2
+        center_lat = (self.N+self.S)/2
+        return center_lat, center_lon
+        
+    def to_geoseries(self):
+        r = super(XYZTile, self).to_geoseries()
+        extra = gpd.GeoSeries([self.tile_src, self.X, self.Y],
+                index=["tile_src", "X", "Y" ])
+        return pd.concat((r,extra))
+
+    @classmethod
+    def __from_geoseries__(cls, gs, apikey=None):
+        """
+        this method is to be called from the parent from_geoseries.
+        returns a dictionary extracted from gs (a Pandas GeoSeries)
+        to be appended to the constructor call.
+        """
+        return {"tile_src": gs["tile_src"], "X": gs["X"], "Y": gs["Y"],
+               "sign_lat": np.sign(gs["center_lat"]), "sign_lon": np.sign(gs["center_lon"])}
+
+    def compute_properties(self):
+        center_lat, center_lon = self.compute_XYZcenter()
+        # if obtained center is different than the one stored
+        # it means that the center has been changed
+        # so recompute XYZ corrsponding to it
+        if center_lat != self.center_lat:
+            print "recomputing XYZ"
+            self.sign_lat = np.sign(self.center_lat)
+            self.sign_lon = np.sign(self.center_lon)
+            
+            self.X, self.Y = self.mercator.GoogleTileFromLatLng(self.center_lat, self.center_lon, self.zoom)
+            
+            self.center_lat, self.center_lon = self.compute_XYZcenter()
+            self.center_lat = np.abs(self.center_lat)*self.sign_lat
+            self.center_lon = np.abs(self.center_lon)*self.sign_lon
+        super(XYZTile, self).compute_properties()
+    
+    def get_url(self):
+        return self.URL_template.replace("{X}", "%d"%self.X).\
+                                 replace("{Y}", "%d"%self.Y).\
+                                 replace("{Z}", "%d"%self.zoom)
+    def get_next_east(self):
+        return XYZTile(zoom=self.zoom, X=self.X+1, Y=self.Y, 
+                       sign_lat=np.sign(self.center_lat), sign_lon=np.sign(self.center_lon))
+
+    def get_next_west(self):
+        return XYZTile(zoom=self.zoom, X=self.X-1, Y=self.Y, 
+                       sign_lat=np.sign(self.center_lat), sign_lon=np.sign(self.center_lon))
+
+    def get_next_south(self):
+        return XYZTile(zoom=self.zoom, X=self.X, Y=self.Y+1, 
+                       sign_lat=np.sign(self.center_lat), sign_lon=np.sign(self.center_lon))
+
+    def get_next_north(self):
+        return XYZTile(zoom=self.zoom, X=self.X, Y=self.Y-1, 
+                       sign_lat=np.sign(self.center_lat), sign_lon=np.sign(self.center_lon))
+
+    def __repr__(self):
+        s = super(XYZTile, self).__repr__()
+        s += "\nX,Y,Z:           %d/%d/%d"%(self.X, self.Y, self.zoom)
+        return s
+
 class SampleTile(Tile):
     def __init__(self, img):
 
@@ -976,8 +1157,7 @@ class SampleTile(Tile):
         self.img = img
 
     def get_id(self):
-        return "0"
-
+        return "0" 
 
 class GeneratedTile(Tile):
 
@@ -1030,6 +1210,21 @@ class GeneratedTile(Tile):
         s = super(GeneratedTile, self).__repr__()
         s += "\ngenerated_from:  %s"%self.generated_from
         return s
+
+class BinaryTile(GeneratedTile):
+    def export_for_kmz(self, dest_dir, rgb_color):
+        cm = self.get_img().copy()
+        assert len(cm.shape)==2, "can only export tiles with single channel"
+        assert type(rgb_color)==tuple or type(rgb_color)==list, "color spec must be a 3-tuple rgb"
+        assert len(rgb_color)==3, "color spec must be a 3-tuple rgb"
+        
+        if np.max(cm)>1:
+            cm = cm*1./np.max(cm)
+            
+        d = np.r_[list(rgb_color)*cm.shape[0]*cm.shape[1]].reshape(cm.shape[0], cm.shape[1],-1)
+        d = np.insert(d, 3, (cm*255).astype(int), axis=2)
+        fname = dest_dir+"/"+self.get_id()+".png"
+        imsave(fname, d)     
 
 class SegmentationProbabilitiesTile(GeneratedTile):
 
@@ -1096,14 +1291,50 @@ class SegmentationProbabilitiesTile(GeneratedTile):
 
         assert len(lab.shape)==2, "label must be single channel"
 
-
-        lab = lab==class_number
+#        lab = lab==class_number
         d   = self.get_classmap(class_number, binary=True, threshold=threshold).get_img().copy()
-        d[lab==1]=0
-        r = GeneratedTile.from_image(d, self)
+        d[lab==class_number]=0
+        r = BinaryTile.from_image(d, self)
         r.format="png"
         return r
 
+    def get_false_positive_detections(self, label_tile, class_number, threshold, 
+                                      min_area_pct=.0005, min_pixel_distance_to_label=15):
+
+        """
+        min_pixel_distance_to_label: min distance to a label pixel to consider a detection valid
+        returns:
+        - boxed_detection_map: image boxes to min_pixel_distance around each detection
+        - blobs: image with detected blobs
+        - detections: list of dictionaries with one detection per blob
+
+        """
+
+        t = self.get_false_positive_map(label_tile, class_number, threshold).get_img()
+        prob_map = self.get_img()[:,:,class_number]
+        prob_map[t==0]=0
+        r,c = get_blobs(prob_map, th=threshold, min_area_pct=min_area_pct)
+
+        # remove detections too close to a label
+        li = label_tile.get_img().copy()
+        lab = np.zeros(li.shape)
+        lab[li==class_number]=1
+        lab[li!=class_number]=0
+        l = min_pixel_distance_to_label
+
+        kk = np.zeros(lab.shape)
+        detections = []
+        for k,v in c.iteritems():
+            x,y = v["centroid"]
+            y1,x1 = np.max([0,y-l]), np.max([0,x-l])
+            y2,x2 = np.min([lab.shape[0]-1,y+l]), np.min([lab.shape[1]-1,x+l])
+            kk[y1:y2,x1:x2] = np.max(lab)*2 if np.max(lab)>0 else 1
+            if np.sum(lab[y1:y2,x1:x2])==0:
+                detections.append(v)
+        boxed_detectios_map = kk
+        blobs = r
+        return boxed_detectios_map, blobs, detections
+      
     def plot_class_probabilities(self):
         img = self.get_img()
         ncols = 4
@@ -1161,6 +1392,8 @@ class SegmentationProbabilitiesTile(GeneratedTile):
                     "iou": np.sum((cp==1)&(cl==1))*1./np.sum((cp==1)|(cl==1))})
 
         return pd.DataFrame(r)
+
+
         
 class GMaps_StaticAPI_Tile(Tile):
 
@@ -1259,7 +1492,30 @@ class GMaps_StaticAPI_Tile(Tile):
             g.use_file_cache=True
         return g
 
-from shapely.geometry import box, Polygon, MultiPolygon, GeometryCollection
+def sh2gmaps(polygon, **kwargs):
+    ml = sh.geometry.MultiLineString
+    polygon = sh.geometry.Polygon(zip(*polygon.boundary[0].xy)) if type(polygon.boundary)==ml else polygon
+    x,y = polygon.boundary.xy
+    return gmaps.Polygon(zip(y,x), **kwargs)
+
+def sh2bbox(polygon, margin_x=0, margin_y=0):
+    """
+    margin_x, margin_x: extra margin in percentage
+    """
+    x,y=polygon.boundary.xy
+    minx,maxx = np.min(x), np.max(x)
+    miny,maxy = np.min(y), np.max(y)
+    
+    mx = (maxx-minx)*margin_x
+    my = (maxy-miny)*margin_y
+    
+    minx -= mx
+    maxx += mx
+    miny -= my
+    maxy += my
+    
+    return sh.geometry.Polygon([(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)])
+
 
 def katana_polygon_split(geometry, threshold, count=0):
     """Split a Polygon into two parts across it's shortest dimension"""
@@ -1312,406 +1568,6 @@ def read_googlemaps_kml(kml_file):
     area = sh.geometry.Polygon(coords)    
     return area
 
-class XGoogleMaps_Static_Image:
-    @classmethod
-    def from_filename(cls, fname):
-        p = re.compile('(\S*)gmaps_(\S+)_(\S+)_zoom_(\d+)_(\d+)x(\d+)_([^_]+)_([^_]+).jpg').match(fname)
-        if p is None:
-            return None
-        dir, lat, lon, zoom, px, py, mtype, logo = p.groups()
-        g = GoogleMaps_Static_Image(np.float64(lat), np.float64(lon), int(zoom),
-                                        (int(px), int(py)),
-                                        mtype, savedir=dir, crop_google_logo=False)
-        g.crop_google_logo = logo=="nologo"
-        g.set_google_logo_height()
-        g.h += g.google_logo_height
-        return g
-
-    def __init__(self, lat, lon, zoom, size, maptype="roadmap", apikey=None,
-                 verbose=0, savedir=None, crop_google_logo=True):
-
-
-        self.lat = np.float64(lat)
-        self.lon = np.float64(lon)
-        self.zoom = zoom
-        self.w = size[0]
-        self.h = size[1]
-        self.maptype = maptype
-        self.apikey  = apikey
-        self.img     = None
-        self.verbose = verbose
-        self.savedir = savedir
-        self.crop_google_logo = crop_google_logo
-        self.set_google_logo_height()
-
-        parallelMultiplier = np.cos(lat * np.pi / 180)
-        self.degreesPerPixelX = 360. / np.power(2, self.zoom + 8)
-        self.degreesPerPixelY = 360. / np.power(2, self.zoom + 8) * parallelMultiplier
-
-    def set_google_logo_height(self):
-        self.google_logo_height = 20 if self.crop_google_logo else 0
-
-    def set_apikey(self, apikey):
-        self.apikey = apikey
-
-    def set_savedir(self, savedir):
-        self.savedir = savedir
-
-    def get_url(self, apikey=None):
-        apikey = self.apikey if apikey is None else apikey
-        assert apikey is not None, "must set apikey"
-        s = "https://maps.googleapis.com/maps/api/staticmap?center=%s,%s&zoom=%s&size=%sx%s&maptype=%s&key=%s"% \
-            (str(self.lat),str(self.lon),str(self.zoom), str(self.w), str(self.h), self.maptype, apikey)
-        return s
-
-    def get_img_size(self):
-        return self.w, self.h-self.google_logo_height
-
-    def get_img(self, apikey=None):
-        if self.img is not None:
-            return self.img
-
-        if os.path.isfile(self.get_fname()):
-            f = self.get_fname()
-            if self.verbose>0:
-                print ("loading from file",f)
-            return Image.open(f)
-
-        url = self.get_url(apikey)
-        if self.verbose>0:
-            print ("retrieving", url)
-        file = BytesIO(urlopen(url).read())
-        self.img = Image.open(file).crop((0,0,self.w, self.h-self.google_logo_height))
-        return self.img
-
-    def get_polygon(self):
-        # polygon coordinate order is lon,lat (to facilitate x,y plotting)
-        bbox = self.get_bbox()
-        return np.r_[[bbox["NE"][::-1], bbox["NW"][::-1], bbox["SW"][::-1], bbox["SE"][::-1]]]
-
-    def get_point_latlon(self, x, y):
-        pointLat = self.lat - self.degreesPerPixelY * ( y - self.h / 2)
-        pointLng = self.lon + self.degreesPerPixelX * ( x  - self.w / 2)
-
-        return np.r_[(pointLat, pointLng)]
-
-    def get_bbox(self):
-        return {
-                "SW": self.get_point_latlon(0, self.h-self.google_logo_height),
-                'NE': self.get_point_latlon(self.w, 0),
-                'SE': self.get_point_latlon(self.w, self.h-self.google_logo_height),
-                'NW': self.get_point_latlon(0, 0)
-               }
-
-    def get_fname(self):
-        savedir = self.savedir
-        assert savedir is not None, "must set savedir"
-        return savedir+"/gmaps_%s_%s_zoom_%s_%sx%s_%s%s.jpg"%\
-                            (str(self.lat),str(self.lon),str(self.zoom), str(self.w), str(self.h-self.google_logo_height),
-                            self.maptype, "_nologo" if self.crop_google_logo else "")
-
-
-    def save(self, apikey=None, overwrite=False):
-        fname = self.get_fname()
-        if not overwrite and os.path.isfile(fname):
-            if self.verbose>0:
-                print ("skipping existing", fname)
-            return
-        if self.verbose>0:
-            print ("saving to", fname)
-        self.get_img(apikey).convert('RGB').save(fname)
-
-    def copy_to(self, lat, lon):
-        return GoogleMaps_Static_Image(lat=lat, lon=lon, zoom=self.zoom, size=(self.w, self.h),
-                                       maptype=self.maptype, apikey=self.apikey, savedir=self.savedir,
-                                       verbose=self.verbose, crop_google_logo=self.crop_google_logo)
-
-    def get_next_east(self):
-        lat,lon = self.get_point_latlon(self.w*3/2, self.h/2)
-        return self.copy_to(lat, lon)
-
-    def get_next_west(self):
-        lat,lon = self.get_point_latlon(-self.w/2, self.h/2)
-        return self.copy_to(lat, lon)
-
-    def get_next_south(self):
-        lat,lon = self.get_point_latlon(self.w/2, self.h*3/2-self.google_logo_height)
-        return self.copy_to(lat, lon)
-
-    def get_next_north(self):
-        lat,lon = self.get_point_latlon(self.w/2, -self.h/2+self.google_logo_height)
-        return self.copy_to(lat, lon)
-
-    def get_gmap_polygon(self):
-        b = self.get_bbox()
-        return gmaps.Polygon([tuple(b["NE"]), tuple(b["NW"]), tuple(b["SW"]), tuple(b["SE"])])
-
-    def show_in_gmap(self, apikey=None):
-        apikey = self.apikey if apikey is None else apikey
-        assert apikey is not None, "must set apikey"
-
-        gmaps.configure(api_key=self.apikey)
-        gmap_b = self.get_gmap_polygon()
-        fig = gmaps.figure(center=(self.lat, self.lon), zoom_level=self.zoom)
-        fig.add_layer(gmaps.drawing_layer(features=[gmap_b]))
-        return fig
-
-    def get_html_imgtag(self, width=None, height=None, class_tag=None):
-        from rlx.dashboards import get_img_tag
-        k = np.array(self.get_img().convert("RGB"))
-        fig=plt.figure()
-        plt.imshow(k)
-        plt.axis("off")
-        tag = get_img_tag(fig, width, height, class_tag)
-        plt.close()
-        return tag
-
-    def get_area(self,  units="m2"):
-        allowed_units = ["m2", "km2"]
-        assert units in allowed_units, "units must be one of "+str(allowed_units)
-        bb = self.get_bbox()
-        mne = latlon_to_meters(*bb["NE"])
-        msw = latlon_to_meters(*bb["SW"])
-        r = (mne[0]-msw[0])*(mne[1]-msw[1])
-        if units=="km2":
-            r = r/1e6
-        return r
-
-    def get_area_str(self):
-        a = self.get_area()
-        print a
-        return "%.2f m2"%a if a<10 else "%d m2"%a if a<=1e4 else "%.3f km2"%(a/1e6) if a<1e5 else "%.2f km2"%(a/1e6)
-
-    def __repr__(self):
-        b = self.get_bbox()
-        s =    "center:  lat %s, lon %s"%(str(self.lat), str(self.lon))
-        s += "\nzoom:    %d"%self.zoom
-        s += "\nsize:    %dx%d px"%(self.w,self.h-self.google_logo_height)
-        s += "\nmaptype: %s"%self.maptype
-        s += "\narea:    " + self.get_area_str()
-        s += "\nbbox:\n"+"\n".join(["    "+k+": "+str(v) for k,v in b.iteritems()])
-        return s
-
-
-class XGoogleMaps_Static_Mosaic:
-
-    def __init__(self, init_gImage, nw, nh):
-        """
-        init_gImage: GoogleMaps_Static_Image from the top_left of the mosaic
-        nw, nh: number of images wide and tall
-        """
-        self.apikey = init_gImage.apikey
-        self.zoom   = init_gImage.zoom
-        self.nw = nw
-        self.nh = nh
-        self.mosaic = [["" for _ in range(nw)] for _ in range(nh)]
-        gw = gh = init_gImage
-        for _nw in range(nw):
-            for _nh in range(nh):
-                self.mosaic[_nh][_nw] = gh
-                gh = gh.get_next_south()
-            gw = gh = gw.get_next_east()
-
-        # the mosaic lat,lon is the mean of the composing images centers
-        from rlx.utils import flatten
-        flat =  flatten(self.mosaic)
-        self.lat = np.mean([i.lat for i in flat])
-        self.lon = np.mean([i.lon for i in flat])
-        self.bbox = self.get_bbox()
-
-    def get_single_img(self):
-        init_g = self.mosaic[0][0]
-        img = np.array(init_g.get_img().convert("RGB"))
-        w_px,h_px = img.shape[1], img.shape[0]
-
-        k = np.zeros((h_px*self.nh, w_px*self.nw,3)).astype(img.dtype)
-
-        for _nw,_nh in pbar(max_value=self.nw*self.nh)(itertools.product(range(self.nw), range(self.nh))):
-            k[_nh*h_px:(_nh+1)*h_px, _nw*w_px:(_nw+1)*w_px, : ] = np.array(self.mosaic[_nh][_nw].get_img().convert("RGB"))
-        return Image.fromarray(k)
-
-    def get_imgs(self):
-        r = [["" for _ in range(self.nw)] for _ in range(self.nh)]
-        for _nw,_nh in itertools.product(range(self.nw), range(self.nh)):
-            r[_nh][_nw] = self.mosaic[_nh][_nw].get_img()
-        return r
-
-    def get_gmap_polygon(self):
-        b = self.get_bbox()
-        return gmaps.Polygon([tuple(b["NE"]), tuple(b["NW"]), tuple(b["SW"]), tuple(b["SE"])])
-
-    def show_in_gmap(self, apikey=None, zoom=None, show_grid=False):
-        apikey = self.apikey if apikey is None else apikey
-        assert apikey is not None, "must set apikey"
-
-        zoom = self.zoom if zoom is None else zoom
-        gmaps.configure(api_key=self.apikey)
-        fig = gmaps.figure(center=(self.lat, self.lon), zoom_level=zoom)
-        if show_grid:
-            gmap_b = [i.get_gmap_polygon() for i in flatten(self.mosaic)]
-            fig.add_layer(gmaps.drawing_layer(features=gmap_b))
-
-        fig.add_layer(gmaps.drawing_layer(features=[self.get_gmap_polygon()]))
-
-        return fig
-
-    def get_bbox(self):
-        if hasattr(self, 'bbox') and self.bbox is not None:
-            return self.bbox
-        def ops_corner(corner, oplat, oplon):
-            k = np.r_[[i.get_bbox()[corner] for i in flatten(self.mosaic)]]
-            return oplat(k[:,0]), oplon(k[:,1])
-        r = {}
-        r["NE"] = ops_corner("NE", np.max, np.max)
-        r["NW"] = ops_corner("NW", np.max, np.min)
-        r["SW"] = ops_corner("SW", np.min, np.min)
-        r["SE"] = ops_corner("SE", np.min, np.max)
-        return r
-
-    def save(self, overwrite=False):
-        for i in pbar()(flatten(self.mosaic)):
-            i.save(overwrite=overwrite)
-
-    def get_area_str(self):
-        t = self.mosaic[0][0]
-        a = t.get_area() * self.nw*self.nh
-        return "%d m2"%a if a<=1e4 else "%.3f km2"%(a/1e6) if a<1e5 else "%.2f km2"%(a/1e6)
-
-    def __repr__(self):
-        b = self.get_bbox()
-        t = self.mosaic[0][0]
-        s =    "center:  lat %s, lon %s"%(str(self.lat), str(self.lon))
-        s += "\nzoom:    %d"%self.zoom
-        s += "\ntiles:   %d"%(self.nw*self.nh)
-        s += "\nsize:    %dx%d px"%(self.nw*t.w,self.nh*(t.h-t.google_logo_height))
-        s += "\n         %dx%d tiles (%dx%d px each)"%(self.nw,self.nh, t.w, t.h-t.google_logo_height)
-        s += "\nmaptype: %s"%t.maptype
-        s += "\narea:    " + self.get_area_str()
-        s += "\nbbox:\n"+"\n".join(["    "+k+": "+str(v) for k,v in b.iteritems()])
-        return s
-
-
-class XGoogleMaps_Shapefile_Layer:
-
-    def __init__(self, layer_name, shapefile_name, utm_zone_number, utm_zone_letter):
-        self.fname = shapefile_name
-        self.layer_name = layer_name
-        self.utm_zone_number = utm_zone_number
-        self.utm_zone_letter = utm_zone_letter
-        if shapefile_name is not None:
-            self.shapefile = read_shapefile(shapefile_name, utm_zone_number=utm_zone_number, utm_zone_letter=utm_zone_letter)
-            self.generate_polygons()
-        else:
-            self.shapefile = None
-        self.color_function = None
-
-    def generate_polygons(self):
-        print ("generating polygons")
-        self.mpols = [get_shapely_multipolygon([i[:,::-1] for i in p]) for p in pbar()(self.shapefile.latlon_coords.values)]
-
-    def set_color_function(self, func):
-        """
-        func takes one argument which is a pd.Series representing a row from self.shapefile
-        and returns a color spec
-        """
-        self.color_function = func
-
-    def save_layer_patches_for_gmaps_img(self, gmaps_img, kwargs_list):
-        for kwargs in kwargs_list:
-            if not self.save_layer_patch_for_gmaps_img(gmaps_img, **kwargs):
-                break
-
-    def save_layer_patch_for_gmaps_img(self, gmaps_img, target_dir, color_func,
-                                       suffix="", overlay_original=False, verbose=False,
-                                       default_color="white", default_alpha=1.,
-                                       single_channel_map=None, format="jpg",
-                                       min_classes_per_img=None, use_255_range_in_single_channel=True):
-        self.set_color_function(color_func)
-
-        lname = target_dir+"/"+(".".join(gmaps_img.get_fname().split(".")[:-1])+"_%s%s.%s"%(self.layer_name, suffix, format)).split("/")[-1]
-        if os.path.isfile(lname):
-            if verbose:
-                print ("skipping existing", lname)
-            return True
-
-        bbox = sh.geometry.Polygon(gmaps_img.get_polygon())
-        si = self.shapefile.iloc[[bbox.intersects(p) for p in self.mpols]]
-
-        pols = [get_shapely_multipolygon([i[:,::-1] for i in p]) for p in si.latlon_coords.values]
-        fcols = [self.color_function(i) for _, i in si.iterrows()]
-        cols = [i[0] if type(i)==tuple else i for i in fcols]
-        alphas = [i[1] if type(i)==tuple else 1. for i in fcols]
-
-        if len(pols)==0:
-            if verbose:
-                print ("no intersecting polygons in shapefile for %s"%gmaps_img.get_fname())
-            return False
-        # compute bounding box for all polygons
-        union = pols[0]
-        for i in pols[1:]:
-            union = union.union(i)
-
-        xmin, ymin = np.r_[[sh.geometry.mapping(bbox)["coordinates"][0]]].min(axis=1)[0]
-        xmax, ymax = np.r_[[sh.geometry.mapping(bbox)["coordinates"][0]]].max(axis=1)[0]
-        w,h = gmaps_img.get_img_size()
-
-        xscale = w/(xmax-xmin)
-        yscale = h/(ymax-ymin)
-        fig = plt.figure(figsize=(w*1./100, h*1./100), dpi=100, frameon=False)
-        ax = fig.add_subplot(111)
-
-        # make background polygon
-        bpol = sh.geometry.Polygon(([0,0], [w,0], [w,h], [0,h]))
-
-        # intersect all polygons with bounding box and scale them to img pixels
-        used_colors = []
-        for i in range(len(pols)):
-            pol = pols[i]
-            pol = pol.intersection(bbox)
-            kpol = sh.affinity.translate(pol, xoff=-xmin, yoff=-ymin)
-            kpol = sh.affinity.scale(kpol, xfact=w/(xmax-xmin), yfact=h/(ymax-ymin), origin=(0,0))
-            bpol = bpol.difference(kpol)
-            ax.add_patch(descartes.PolygonPatch(kpol, color=cols[i], lw=0, alpha=alphas[i]))
-            used_colors.append(str(cols[i]))
-
-        used_colors = np.unique(used_colors)
-
-        ## if not enough classes skip it
-        if verbose:
-            print ("found %d classes (min is %d) in %s"%(len(used_colors), min_classes_per_img, gmaps_img.get_fname()))
-        if min_classes_per_img is not None and len(used_colors)< min_classes_per_img:
-            if verbose:
-                print ("not enough classes (%d found) in %s"%(len(used_colors), gmaps_img.get_fname()))
-            plt.close()
-            return False
-
-        ## add remaining space as white
-        if bpol.area>0:
-            ax.add_patch(descartes.PolygonPatch(bpol, color=default_color, lw=0, alpha=default_alpha))
-
-        ax.set_xlim((0,w))
-        ax.set_ylim((0,h))
-        if overlay_original:
-            plt.imshow(np.flip(np.array(gmaps_img.get_img()), axis=0), origin="bottom")
-
-        ax.set_axis_off()
-        fig.subplots_adjust(bottom = 0)
-        fig.subplots_adjust(top = 1)
-        fig.subplots_adjust(right = 1)
-        fig.subplots_adjust(left = 0)
-
-        if verbose:
-            print ("saving to", lname)
-        fig.savefig(lname)
-        plt.close()
-
-        if single_channel_map is not None:
-            k = imread(lname)
-            k = convert_label_to_single_channel(k, single_channel_map, use_255_range_in_single_channel)
-            k = most_common_neighbour(k, (6,6))
-            imsave(lname, k)
-
-        return True
 
 def convert_label_to_single_channel(multi_channel_label_img, channel_map, use_255_range=True):
     assert len(multi_channel_label_img.shape)==3, "img must be multichannel"
@@ -1775,3 +1631,99 @@ def show_channel_map(channel_map, matplotlib_colormap=plt.cm.jet, use_255_range=
     kk = convert_label_to_multi_channel(ks, channel_map, use_255_range)
     plt.imshow(kk, cmap=matplotlib_colormap)
     plt.axis("off")
+
+
+def get_blobs(img, th, min_area_pct=.0005):
+    """
+    separates the blobs within a probability matrix and obtains coordinates of
+    the center of mass of each blob (or some random point if the center
+    of mass falls outside)
+    """
+    def get_inbody_centroid(binary_image):
+
+        p = np.argwhere(binary_image>0)
+        p = p[np.random.permutation(len(p))[:1000]]
+        km = KMeans(n_clusters=10)
+        km.fit(p)
+        cc = km.cluster_centers_
+        return np.r_[[int(i) for i in cc[np.random.randint(len(cc))]]]
+        
+    from scipy.ndimage.measurements import center_of_mass
+    from scipy.ndimage import label
+    k = img.copy()
+    k[k<th]  = 0
+    k[k>=th] = 1
+
+    blobs, number_of_blobs = label(k)
+    r = blobs.copy()
+    centroids = {}
+    for i in np.unique(blobs):
+        at_i = blobs==i
+        pct = np.mean(at_i)
+        if pct<min_area_pct:
+            blobs[at_i]=0
+        else:
+            k = blobs.copy()
+            k[k!=i]=0
+            cm = center_of_mass(k)
+            if np.isnan(cm[0]):
+                continue
+            y, x = np.r_[[int(j) for j in  cm]]
+            
+            # in case centroid falls outside body
+            if r[y,x]==0:
+                y,x = get_inbody_centroid(k)
+            centroids[i] = {"centroid": (x,y), "area_pct": pct, "mean_prob": np.mean(img[at_i])}
+            
+    return r, centroids
+
+def centroids_to_kml(doc_file, centroids):
+    
+    tpl="""<?xml version="1.0" encoding="UTF-8"?>
+    <kml xmlns="http://www.opengis.net/kml/2.2">
+      <Document>
+        <name>places</name>
+        %s
+      </Document>
+    </kml>
+
+    """
+
+    kml = tpl%s
+
+    with open(doc_file, "w") as f:
+        f.write(kml)
+
+def save_detections_kml(fname, preds_ts, labels_ts, class_nb, th):
+    s = ""
+    for i in pbar()(range(len(preds_ts))):
+        pred_tile = preds_ts.tiles[i]
+        label_tile = labels_ts.tiles[i]
+
+        _,_,centroids = pred_tile.get_false_positive_detections(label_tile, class_nb, th)
+        for centroid in centroids:
+            desc = "area_pct %.3f%s, mean_prob: %.2f"%(centroid["area_pct"]*100, "%", centroid["mean_prob"])
+            lon, lat = pred_tile.get_pixel_latlon(*centroid["centroid"])
+            s += """
+            <Placemark><name>%s</name><styleUrl>#icon-1899-0288D1-nodesc</styleUrl>
+                <Point>
+                    <coordinates>
+                    %f,%f
+                    </coordinates>
+                </Point>
+            </Placemark>
+            """%(desc, lon, lat)
+
+    kml="""<?xml version="1.0" encoding="UTF-8"?>
+    <kml xmlns="http://www.opengis.net/kml/2.2">
+    <Document>
+        <name>places</name>
+        %s
+    </Document>
+    </kml>
+    """%s
+
+
+    with open(fname, "w") as f:
+        f.write(kml)
+

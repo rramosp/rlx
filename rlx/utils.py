@@ -28,7 +28,6 @@ else:
     import matplotlib as mpl
     mpl.use('Agg')
     import matplotlib.pyplot as plt
-    print "warning: matplotlib loaded without DISPLAY"
 
 from IPython.core import display
 import contextlib
@@ -66,6 +65,23 @@ STANDARD_COLORS = np.r_[[
     'WhiteSmoke', 'Yellow', 'YellowGreen'
 ]]
 
+
+def angle_vector(v):
+    """
+        compute angle with respect to the positive X direction
+        of the vector given as argument (assumed a vector to the origin)
+
+    :param v: a 2D vector
+    :return: the angle in degrees
+    """
+    # asserts removed for efficiency
+    #    assert type(b) == np.ndarray, "vector must be numpy array"
+    #    assert b.shape == (2,), "must have vector of length two"
+    # implementation for two vectors
+    #
+    #    return 180 + np.arctan2(a[1] - b[1], a[0] - b[0]) * 180 / np.pi
+
+    return 180 + np.arctan2(-v[1], -v[0]) * 180 / np.pi
 
 
 def read_password_protected_zip(fname):
@@ -306,6 +322,11 @@ def hilite_code(code):
 def get_default_style():
     return 'border:solid gray;border-width:.1em .1em .1em .8em;padding:.2em .6em;'
 
+def cfg2dict(cfg_file):
+    from ConfigParser import ConfigParser
+    cfg = ConfigParser()
+    cfg.read(cfg_file)
+    return {i:{k:v for k,v in cfg.items(i)} for i in cfg.sections()}
 
 @contextlib.contextmanager
 def printoptions(*args, **kwargs):
@@ -491,3 +512,11 @@ def most_common_neighbour(img, window_size):
     for y,x in itertools.product(range(rw.shape[0]), range(rw.shape[1])):
         r[y,x]=most_common(list(rw[y,x].flatten()))
     return r
+
+
+def figset(h, w, figsize, axis="on"):
+    fig = plt.figure(figsize=figsize)
+    for i in range(h*w):
+        ax = fig.add_subplot(h,w,i+1)
+        plt.axis(axis)
+        yield ax
