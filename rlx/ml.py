@@ -1122,7 +1122,7 @@ class Segmentation_Label_Map:
 
         # paint allpolygons
         for i in range(len(pols)):
-            kpol = pols[i]
+            kpol = pols[i].envelope
             ax.add_patch(descartes.PolygonPatch(kpol, color=colors[i],
                                                 lw=1, alpha=geometries_alpha))
             bpol = bpol.difference(kpol)
