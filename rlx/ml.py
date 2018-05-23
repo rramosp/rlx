@@ -1117,6 +1117,7 @@ class Segmentation_Label_Map:
 #            nimg = np.flip(np.array(tile.get_img().convert("RGB")), axis=0)
             ax.imshow(np.flip(tile.get_img(), axis=0), alpha=tile_alpha)
 
+
         # make background polygon
         bpol = sh.geometry.Polygon(([0,0], [tile.w,0], [tile.w,tile.h], [0,tile.h]))
 
