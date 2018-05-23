@@ -1030,6 +1030,12 @@ class Segmentation_Label_Map:
         """
         raise NotImplementedError
 
+    def get_label_names(self):
+        """
+        this must return a list with label names, corresponding, in order to label [0,1,2...]
+        """
+        raise NotImplementedError
+
     def create_contrast_image(self):
         im, si = 3,4
         w = (im+si)*4+im

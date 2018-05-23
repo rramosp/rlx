@@ -628,6 +628,47 @@ class TileSet(object):
                 fig.add_layer(layer)
         return fig
 
+    def lat_split(self, n_splits, mode="tileset"):
+        """
+        splits in latitude so that each split has aprox the same
+        number of tiles mode must be 'tileset' or 'indexes'
+        """
+        assert mode in ["tileset", "indexes"], "mode must be 'tileset' or 'indexes'"
+        
+        lats = [i.center_lat for i in self.tiles]
+        quantiles = np.linspace(0,100,n_splits+1)
+        percs = [np.percentile(lats, i) for i in quantiles]
+        percs[-1] = percs[-1]+(percs[-1]-percs[0])*.1
+        tsplits = []
+        for i in range(len(percs)-1):
+            idxs = [t.center_lat>=percs[i] and t.center_lat<percs[i+1] for t in self.tiles]
+            if mode =="tileset":
+                tsplits.append(geo.TileSet.from_tilelist(np.r_[self.tiles][idxs]))
+            else:
+                tsplits.append(np.argwhere(idxs)[:,0])
+        return tsplits
+
+    def lon_split(self, n_splits, mode="tileset"):
+        """
+        splits in longitude so that each split has aprox the same
+        number of tiles mode must be 'tileset' or 'indexes'
+        """
+        assert mode in ["tileset", "indexes"], "mode must be 'tileset' or 'indexes'"
+        lons = [i.center_lon for i in self.tiles]
+        quantiles = np.linspace(0,100,n_splits+1)
+        percs = [np.percentile(lons, i) for i in quantiles]
+        
+        percs[-1] = percs[-1]+(percs[-1]-percs[0])*.1
+        tsplits = []
+        for i in range(len(percs)-1):
+            idxs = [t.center_lon>=percs[i] and t.center_lon<percs[i+1] for t in self.tiles]
+            if mode =="tileset":
+                tsplits.append(geo.TileSet.from_tilelist(np.r_[self.tiles][idxs]))
+            else:
+                tsplits.append(np.argwhere(idxs)[:,0])
+        return tsplits
+
+
     def get_boundary(self):
         k = self.tiles[0].get_polygon()
         for tile in self.tiles[1:]:
