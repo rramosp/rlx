@@ -1095,8 +1095,11 @@ class Segmentation_Label_Map:
         # paint allpolygons
         for i in range(len(ki)):
             kpol = ki.iloc[i]["geometry"]
-            ax.add_patch(descartes.PolygonPatch(kpol, color=ki.iloc[i]["color"],
-                                                lw=1, alpha=geometries_alpha))
+            try:
+                ax.add_patch(descartes.PolygonPatch(kpol, color=ki.iloc[i]["color"],
+                                                    lw=1, alpha=geometries_alpha))
+            except Exception as e:
+                print "warning: error ",e, "on tile", self.current_tile.get_id()                    
             bpol = bpol.difference(kpol)
 
         ## add remaining space with default color
