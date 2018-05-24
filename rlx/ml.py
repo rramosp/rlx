@@ -1001,7 +1001,7 @@ class Segmentation_Label_Map:
         from sklearn.preprocessing import MinMaxScaler
         mm = MinMaxScaler(feature_range=(0,255)).fit(np.r_[[labels]].T.astype(float))
         print "sorted", labels                                                                                                                                                                                                                                                              
-        self.label_colors = {k: cm(mm.transform(k)[0,0].astype(int))[:3] for k in self.label_names.keys()}
+        self.label_colors = {k: cm(mm.transform([[k]])[0,0].astype(int))[:3] for k in self.label_names.keys()}
         
     def set_ref_geodf(self, ref_geodf):
         self.ref_geodf = ref_geodf
