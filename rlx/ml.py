@@ -992,7 +992,7 @@ class Segmentation_Label_Map:
         cm = self.get_colormap()
         self.label_names = self.get_label_names()
         
-        assert -1 in self.label_names, "map must define default class with label -1"
+        assert 0 in self.label_names, "map must define default class with label 0"
         assert np.alltrue([type(i)==int for i in self.label_names.keys()]), "labels must be ints"
         
         # creates label colors from colormap
@@ -1007,7 +1007,7 @@ class Segmentation_Label_Map:
     def get_label_names(self):
         """
         must return a dictionary label_number: label_name the default class for pixels not falling 
-        under any polygon must be class number -1
+        under any polygon must be class number 0
         """
         raise NotImplementedError
 
@@ -1039,7 +1039,7 @@ class Segmentation_Label_Map:
         tile = self.current_tile
         gf   = self.current_intersection
         
-        default_color=self.label_colors[-1]
+        default_color=self.label_colors[0]
 
         pol = tile.get_polygon()
         xmin, ymin = np.array(pol.exterior.xy).min(axis=1)
@@ -1075,7 +1075,7 @@ class Segmentation_Label_Map:
         tile = self.current_tile
         gf   = self.current_intersection
 
-        default_color=self.label_colors[-1]
+        default_color=self.label_colors[0]
 
         ki = self.scale_geometries()
         
@@ -1164,7 +1164,7 @@ class Segmentation_Label_Map:
                     mask   = Path(coords).contains_points(points).reshape(tile.h, tile.w)
                     rs[g.label][mask] = 0  
 
-        r = np.ones((tile.h, tile.w)).astype(int)*-1
+        r = np.zeros((tile.h, tile.w)).astype(int)
         for label, mask in rs.iteritems():
             r[mask==1] = label
             
