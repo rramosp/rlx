@@ -435,9 +435,21 @@ class TileSet(object):
             self.tiles = [Tile.from_geoseries(i, savedir=self.dir, use_file_cache=self.dir is not None) for _,i in self.metadata.iterrows()]
             self.compute_properties()
 
+        self.index = None
+
     def __len__(self):
         return len(self.metadata)
 
+    def get_by_id(self, tile_id):
+        # builds tile index if does not exist
+        if self.index is None:
+            self.index = {i.get_id():i for i in self.tiles}
+
+        try:
+            return self.index[tile_id]
+        except KeyError:
+            return None
+            
     def get_metadata_filename(self, dir=None):
         dir = self.dir if dir is None else dir
         return dir+"/tileset.geojson" if dir is  not None else None
@@ -805,7 +817,7 @@ class Tile(object):
         self.img     = None
 
         self.use_file_cache=use_file_cache
-
+        self.properties = {}
         self.compute_properties()
 
     def compute_properties(self):
@@ -813,10 +825,10 @@ class Tile(object):
         self.degreesPerPixelX = 360. / np.power(2, self.zoom + 8)
         self.degreesPerPixelY = 360. / np.power(2, self.zoom + 8) * parallelMultiplier
 
-        self.bbox = {  'SW': self.get_pixel_latlon(0, self.h),
-                       'NE': self.get_pixel_latlon(self.w, 0),
-                       'SE': self.get_pixel_latlon(self.w, self.h),
-                       'NW': self.get_pixel_latlon(0, 0)
+        self.bbox = {  'SW': self.get_lonlat_at_pixel(0, self.h),
+                       'NE': self.get_lonlat_at_pixel(self.w, 0),
+                       'SE': self.get_lonlat_at_pixel(self.w, self.h),
+                       'NW': self.get_lonlat_at_pixel(0, 0)
                     }
 
     def get_gmap_polygon(self, **kwargs):
@@ -962,18 +974,72 @@ class Tile(object):
         self.save(savedir=dest_dir)
         self.savedir = savedir
 
-    def get_pixel_latlon(self, x, y):
+
+    def embed_tiles(self, tiles):
+        from skimage import transform
+        """
+        embeds tiles into an image wiht the same size as this tile's.
+        tiles must be contained within this one
+        returns an image with tiles embedded
+        """
+        # check all tiles are contained
+        assert np.alltrue([self.get_polygon(fatten=.001).contains(i.get_polygon()) for i in tiles]), \
+            "all tiles must be contained within parent"
+
+        # check all tiles have the same number of dimensions
+        shapes = [t.get_img().shape for t in tiles]
+        assert np.alltrue([len(shapes[0])==len(i) for i in shapes[1:]]), "all tiles must have the same dimensions"
+        
+        # if more than two dimensions (multichannel) check the rest of dimensions are the same
+        if len(shapes[0])>2:
+            assert np.alltrue([np.alltrue(np.r_[shapes[0][2:]]==i[2:]) for i in shapes[1:]]), "all tiles must have the same channels"
+            
+        # create empty destination shape with same depth
+        img       = tiles[0].get_img()
+        zshape = np.r_[img.shape]
+        zshape[0] = self.h
+        zshape[1] = self.w
+        zimg = np.zeros(zshape).astype(img.dtype)
+
+        # scale and place each tile using its coordinates
+        for tile in tiles:
+            pnw = self.get_pixel_at_lonlat(*tile.bbox["NW"])
+            pse = self.get_pixel_at_lonlat(*tile.bbox["SE"])
+            psize = pse-pnw
+            zimg[pnw[1]:pse[1], pnw[0]:pse[0]] = transform.resize(tile.get_img(), (psize[1], psize[0]), preserve_range=True)
+
+        self.img = zimg
+        self.format = tiles[0].format 
+        return zimg
+
+    def get_lonlat_at_pixel(self, x, y):
         w,h = self.w, self.h
         pointLat = self.center_lat - self.degreesPerPixelY * ( y - h / 2)
         pointLng = self.center_lon + self.degreesPerPixelX * ( x - w / 2)
 
         return np.r_[(pointLng, pointLat)]
 
-    def get_polygon(self):
+    def get_pixel_at_lonlat(self, lon,lat):
         w,h = self.w, self.h
-        return sh.geometry.Polygon( [self.bbox["SW"], self.bbox["SE"],
-                                     self.bbox["NE"], self.bbox["NW"]]  )
+        
+        y = int(np.round((self.center_lat - lat)*1./self.degreesPerPixelY + h/2.))
+        x = int(np.round((lon-self.center_lon )*1./self.degreesPerPixelX + w/2.))
+        
+        return np.r_[(x,y)]
 
+    def get_polygon(self, fatten=0.0):
+        """
+        fatten: increase polygon size by this percentace (0-1 range)
+        """
+        w,h = self.w, self.h
+        bb = self.bbox
+        dsize = np.abs(bb["NW"] - bb["SE"]) *  fatten
+        l = [bb["SW"]-dsize, 
+            bb["SE"]+dsize*np.r_[1,-1], 
+            bb["NE"]+dsize, 
+            bb["NW"]+dsize*np.r_[-1,1]] 
+        return sh.geometry.Polygon( l )
+        
     def intersection(self, geo_dataframe, show_progress=False):
         """
         intersects this tile with the geometries of a GeoDataFrame
@@ -1188,6 +1254,64 @@ class XYZTile(Tile):
         s += "\nX,Y,Z:           %d/%d/%d"%(self.X, self.Y, self.zoom)
         return s
 
+def generate_XZY_tile_hierarchy(ref_xyz_tileset, target_tileset, dest_dir):
+    """
+    generates tilesets for all zoom levels starting off from the zoom level
+    of ref_xyz_tileset, up (with decreasing zoom level) until the zoom level 
+    with less than 4 tiles
+    
+    ref_xyz_tileset: any XYZ tileset
+    target_tileset: a tileset generated from the reference tileset
+                    must have the same tile ids
+    dest_dir: destination folder for zoomed tiles
+    """
+    zoom_level = ref_xyz_tileset.tiles[0].zoom
+    
+    print "saving original zoom level",zoom_level
+    # saves only the tiles in target tileset with tile ids contained in reference tileset
+    zts = target_tileset[[target_tileset.get_by_id(i.get_id()) is not None for i in ref_xyz_tileset.tiles]]
+    zts.save(dir=dest_dir)
+    print "sample XYZ tile", zts.tiles[0].get_local_filename()
+    while(True):
+        zoom_level -= 1
+        
+        print "--"
+        print "computing XYZ tiles aggregation for zoom level", zoom_level
+        z_children = {}
+        z_parents  = {}
+        for i in pbar()(ref_xyz_tileset.tiles):
+            parent_tile = XYZTile(zoom_level, lat=i.center_lat, lon=i.center_lon)
+            zid = parent_tile.get_id()
+            z_parents[zid] = parent_tile
+            if not zid in z_children.keys():
+                z_children[zid] = [i]
+            else:
+                z_children[zid].append(i)
+
+        print "embedding into %d tiles at zoom level %d"%(len(z_parents), zoom_level)
+        for zid in pbar()(z_parents.keys()):
+            t_parent   = z_parents[zid]
+            t_children = z_children[zid]
+            l_children = [target_tileset.get_by_id(i.get_id()) for i in t_children]
+            l_children = [i for i in l_children if i is not None]
+            t_parent.img = t_parent.embed_tiles(l_children)
+            t_parent.format = l_children[0].format
+
+        print "saving tiles for XYZ zoom level", zoom_level
+        zts = TileSet.from_tilelist(z_parents.values())
+
+        tileset_geojson = dest_dir+"/tileset.geojson"
+        if os.path.isfile(tileset_geojson):
+            os.remove(tileset_geojson)
+
+        zts.save(dir=dest_dir)
+        print "sample XYZ tile", zts.tiles[0].get_local_filename()
+        os.remove(tileset_geojson)
+        
+        if len(z_parents)<4:
+            break
+
+
 class SampleTile(Tile):
     def __init__(self, img):
 
@@ -1203,6 +1327,7 @@ class SampleTile(Tile):
 class GeneratedTile(Tile):
 
     def __init__(self):
+        self.properties = {}
         pass
 
     @classmethod
@@ -1226,8 +1351,7 @@ class GeneratedTile(Tile):
         assert gs["class_name"] == cls.__name__, "geoseries must have class_name='%s'"%cls.__name__
 
         r = cls()
-        r.properties = {k:v for k,v in  gs.iteritems()}
-        for k,v in r.properties.iteritems():
+        for k,v in gs.iteritems():
             r.__setattr__(k,v)
         r.savedir = savedir
         r.use_file_cache = True
@@ -1241,7 +1365,9 @@ class GeneratedTile(Tile):
 
     def to_geoseries(self):
         r = super(GeneratedTile, self).to_geoseries()
-        extra = gpd.GeoSeries([self.generated_from],index=["generated_from"])
+        extra_fields = [i for i in self.properties.keys() if not i in r.index]
+        extra_values = [self.properties[i] for i in extra_fields]
+        extra = gpd.GeoSeries(extra_values,index=extra_fields)
         return pd.concat((r,extra))
 
     def get_url(self):
@@ -1253,7 +1379,7 @@ class GeneratedTile(Tile):
         return s
 
 class BinaryTile(GeneratedTile):
-    def export_for_kmz(self, dest_dir, rgb_color):
+    def to_color(self, rgb_color):
         cm = self.get_img().copy()
         assert len(cm.shape)==2, "can only export tiles with single channel"
         assert type(rgb_color)==tuple or type(rgb_color)==list, "color spec must be a 3-tuple rgb"
@@ -1264,6 +1390,14 @@ class BinaryTile(GeneratedTile):
             
         d = np.r_[list(rgb_color)*cm.shape[0]*cm.shape[1]].reshape(cm.shape[0], cm.shape[1],-1)
         d = np.insert(d, 3, (cm*255).astype(int), axis=2)
+        return d
+
+    def to_color_tile(self, rgb_color):
+        d = self.to_color(rgb_color)
+        return GeneratedTile.from_image(d,self)      
+
+    def export_for_kmz(self, dest_dir, rgb_color):
+        d = self.to_color(rgb_color)
         fname = dest_dir+"/"+self.get_id()+".png"
         imsave(fname, d)     
 
@@ -1384,7 +1518,7 @@ class SegmentationProbabilitiesTile(GeneratedTile):
         img = self.get_img()
         for i in range(self.get_num_classes()):
             plt.subplot(nrows, ncols, i+1)
-            plt.imshow(self.get_classmap(i).get_img())
+            plt.imshow(self.get_classmap(i).get_img(),vmin=0, vmax=1)
             plt.axis("off")
             plt.title("CLASS %d"%i)
 
@@ -1489,19 +1623,19 @@ class GMaps_StaticAPI_Tile(Tile):
         return self.img
 
     def get_next_east(self):
-        lon,lat = self.get_pixel_latlon(self.w*3/2, self.h/2)
+        lon,lat = self.get_lonlat_at_pixel(self.w*3/2, self.h/2)
         return self.clone_with_properties({"center_lat": lat, "center_lon":lon})
 
     def get_next_west(self):
-        lon,lat = self.get_pixel_latlon(-self.w/2, self.h/2)
+        lon,lat = self.get_lonlat_at_pixel(-self.w/2, self.h/2)
         return self.clone_with_properties({"center_lat": lat, "center_lon":lon})
 
     def get_next_south(self):
-        lon,lat = self.get_pixel_latlon(self.w/2, self.h*3/2)
+        lon,lat = self.get_lonlat_at_pixel(self.w/2, self.h*3/2)
         return self.clone_with_properties({"center_lat": lat, "center_lon":lon})
 
     def get_next_north(self):
-        lon,lat = self.get_pixel_latlon(self.w/2, -self.h/2)
+        lon,lat = self.get_lonlat_at_pixel(self.w/2, -self.h/2)
         return self.clone_with_properties({"center_lat": lat, "center_lon":lon})
 
     def __repr__(self):
@@ -1744,7 +1878,7 @@ def save_detections_kml(fname, preds_ts, labels_ts, class_nb, th):
         _,_,centroids = pred_tile.get_false_positive_detections(label_tile, class_nb, th)
         for centroid in centroids:
             desc = "area_pct %.3f%s, mean_prob: %.2f"%(centroid["area_pct"]*100, "%", centroid["mean_prob"])
-            lon, lat = pred_tile.get_pixel_latlon(*centroid["centroid"])
+            lon, lat = pred_tile.get_lonlat_at_pixel(*centroid["centroid"])
             s += """
             <Placemark><name>%s</name><styleUrl>#icon-1899-0288D1-nodesc</styleUrl>
                 <Point>
