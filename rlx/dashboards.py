@@ -13,8 +13,7 @@ def create_html(out_html_file, html_template, bokeh_components={}, matplotlib_co
         html = html.replace("__BOKEH_SCRIPT__", script)
         for i in range(len(bokeh_components)):
             print "generating bokeh", i
-            div = '<table><tr><td><div class="bk-root"><div class="bk-plotdiv" id="' + divs[i][
-                "elementid"] + '"></div></div></td></tr></table>\n'
+            div = '<table><tr><td><div class="bk-root"><div class="bk-plotdiv" id="' + divs[i].elementid + '"></div></div></td></tr></table>\n'
             html = html.replace("__" + bokeh_components.keys()[i] + "__", div)
 
     for k in matplotlib_components.keys():
@@ -62,6 +61,14 @@ function wait_element(){
             window.FX_count = window.FX_count + 1;
         }
     }
+}
+
+function meters_to_latlon(mlat, mlon) {
+    var origin_shift = (Math.PI * 6378137 )
+    var lons = mlon * 180/origin_shift
+    var mlat = mlat * 180/origin_shift    
+    var lats = Math.atan(Math.exp(mlat*Math.PI/180. ) ) * 360. / Math.PI - 90
+    return [lats, lons]
 }
 
 function getRandomInt(min, max) {
